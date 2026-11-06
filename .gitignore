@@ -9,3 +9,12 @@ dist/
 
 # Real / sensitive test data (never commit)
 tests-real-sensitive-data/
+
+# OS junk files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
