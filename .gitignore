@@ -1,0 +1,11 @@
+# Python bytecode and caches
+__pycache__/
+*.py[codz]
+*$py.class
+.pytest_cache/
+
+# Build output (no build step is used; keep generated dist/ out of git)
+dist/
+
+# Real / sensitive test data (never commit)
+tests-real-sensitive-data/
