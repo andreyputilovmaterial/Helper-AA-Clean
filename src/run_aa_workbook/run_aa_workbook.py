@@ -99,8 +99,13 @@ STDOUT_COLOR_RESET = "\033[0m"
 SUPPORTED_SUFFIXES = (".xlsx", ".xlsm")
 
 # Seconds to wait, after calling a macro, for Excel to report itself idle
-# again before considering the step finished (and before raising an error).
-IDLE_TIMEOUT_DEFAULT = 300
+# again before continuing.  ``Application.Run`` is synchronous, so the macro
+# has already returned when this wait starts; the poll is a best-effort safety
+# net for any asynchronous tidying Excel does afterwards, and a timeout only
+# logs a warning (see ``wait_for_excel_idle``).  A short default keeps a stale
+# ``Busy``/``Ready`` flag (which can happen after a modal MsgBox is dismissed
+# from another thread) from stalling every step for minutes.
+IDLE_TIMEOUT_DEFAULT = 10
 IDLE_POLL_INTERVAL = 0.25
 SETTLE_SECONDS_DEFAULT = 1.0
 
@@ -419,25 +424,38 @@ def make_working_copy(path, today=None):
 
 
 def wait_for_excel_idle(xl, timeout, poll_interval=IDLE_POLL_INTERVAL):
-    """Block until Excel reports ``Ready`` and not ``Busy``, or raise.
+    """Wait up to ``timeout`` seconds for Excel to report itself idle.
 
-    ``Application.Run`` is synchronous, so normally the macro has already
-    returned by the time we get here; this loop is a safety net for macros
-    that hand work off to Excel asynchronously.
+    ``Application.Run`` is synchronous, so by the time this runs the macro has
+    normally already returned and Excel is idle; the poll is a best-effort
+    safety net for macros that hand work off to Excel asynchronously.
+    ``Application.Busy`` / ``Application.Ready`` are not always trustworthy,
+    however: after a modal message box has been dismissed from the watcher
+    thread (or while Excel finishes tidying up) they can keep reporting
+    ``Busy`` even though the macro has finished.  A timeout is therefore a
+    warning, not an error — the run continues, and any real problem surfaces
+    on the next Excel call.
     """
     deadline = time.monotonic() + timeout
+    last_state = ""
     while True:
         try:
             busy = bool(xl.Busy)
             ready = bool(xl.Ready)
-        except Exception:
+            last_state = f"Busy={busy}, Ready={ready}"
+        except Exception as exc:
             busy, ready = True, False
+            last_state = f"could not read Busy/Ready ({exc})"
         if ready and not busy:
             return
         if time.monotonic() >= deadline:
-            raise RuntimeError(
-                f"timed out after {timeout}s waiting for Excel to go idle"
+            message = (
+                f"Excel did not report idle within {timeout:g}s ({last_state}); "
+                f"continuing because Application.Run has already returned"
             )
+            print(f"warning: {message}")
+            log_event(f"warning: {message}", EVENT_PHASE_FINISHED)
+            return
         time.sleep(poll_interval)
 
 
@@ -1081,8 +1099,9 @@ def build_parser():
         type=float,
         default=IDLE_TIMEOUT_DEFAULT,
         help=(
-            "seconds to wait for Excel to go idle after a macro "
-            f"(default {IDLE_TIMEOUT_DEFAULT})"
+            "max seconds to wait for Excel to report idle after a macro; "
+            "a timeout only warns and continues because Application.Run is "
+            f"synchronous (default {IDLE_TIMEOUT_DEFAULT})"
         ),
     )
     parser.add_argument(

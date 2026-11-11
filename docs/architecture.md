@@ -79,13 +79,16 @@ Workflow:
 5. Run each step's macro via `Application.Run("'file.xlsm'!Macro")`, in order,
    while a background thread watches for the step's message boxes and clicks
    the right button (OK / Cancel), recording validation-error text.
-6. Wait for Excel to go idle (`Application.Ready` and not `Application.Busy`)
-   after each macro, then an optional settle delay.
+6. Wait (best-effort) for Excel to report idle (`Application.Ready` and not
+   `Application.Busy`) after each macro, then an optional settle delay.
 7. After each successful step, save the workbook explicitly so its on-disk
    state is clean, then close — or leave open with `--leave-open`.
 
-`Application.Run` is synchronous; the idle poll is a safety net for macros that
-hand work off asynchronously.
+`Application.Run` is synchronous, so the macro has already returned by the time
+the idle poll starts; it is a best-effort safety net for macros that hand work
+off asynchronously.  `Busy`/`Ready` can stay stale after a modal message box is
+dismissed from another thread, so a timeout only logs a warning and the run
+continues.
 
 ### Message boxes and pass/fail detection
 
@@ -191,7 +194,7 @@ python src/run_aa_workbook/run_aa_workbook.py --program {reload,commit_save,vali
 | `--program KEY` | which program to run; exactly one per run (required) |
 | `--visible` | show the Excel window (default hidden) |
 | `--leave-open` | keep Excel/workbook open (debugging) |
-| `--idle-timeout S` | seconds to wait for Excel to go idle (default 300) |
+| `--idle-timeout S` | max seconds to wait for Excel to report idle after a macro; a timeout only warns and continues (default 10) |
 | `--settle S` | extra seconds after idle (default 1.0) |
 
 Program keys: `reload`, `commit_save`, `validate`, `auto` (`auto` expands to

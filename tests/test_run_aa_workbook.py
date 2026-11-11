@@ -78,10 +78,37 @@ def test_wait_for_excel_idle_returns_when_ready():
     ruw.wait_for_excel_idle(xl, timeout=1, poll_interval=0.01)
 
 
-def test_wait_for_excel_idle_times_out():
+def test_wait_for_excel_idle_returns_after_timeout_without_raising():
     xl = FakeExcel(ready=False, busy=True)
-    with pytest.raises(RuntimeError):
-        ruw.wait_for_excel_idle(xl, timeout=0.05, poll_interval=0.01)
+    ruw.wait_for_excel_idle(xl, timeout=0.05, poll_interval=0.01)
+
+
+def test_wait_for_excel_idle_logs_warning_on_timeout(tmp_path):
+    log = tmp_path / "aa_event_log.csv"
+    ruw.EVENT_LOG_PATH = log
+    try:
+        ruw.wait_for_excel_idle(
+            FakeExcel(ready=False, busy=True), timeout=0.05, poll_interval=0.01
+        )
+    finally:
+        ruw.EVENT_LOG_PATH = None
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "datetime,event,phase"
+    assert "warning:" in lines[1]
+    assert "Application.Run has already returned" in lines[1]
+
+
+def test_wait_for_excel_idle_survives_unreadable_properties():
+    class RaisingExcel:
+        @property
+        def Ready(self):
+            raise RuntimeError("rejected by callee")
+
+        @property
+        def Busy(self):
+            raise RuntimeError("rejected by callee")
+
+    ruw.wait_for_excel_idle(RaisingExcel(), timeout=0.05, poll_interval=0.01)
 
 
 # --- run_macro --------------------------------------------------------------

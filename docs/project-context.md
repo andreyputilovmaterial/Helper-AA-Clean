@@ -1,6 +1,13 @@
 # Project Context — Helper-AA-Clean
 
 > Last updated: 2026-11-11
+> (2026-11-11) `wait_for_excel_idle` no longer raises on timeout.
+> `Application.Run` is synchronous, so when the idle poll runs the macro has
+> already returned; after a modal `MsgBox` is dismissed from the watcher thread
+> Excel can keep reporting `Busy`/`Ready` stale, which used to fail an
+> otherwise-successful run with "timed out after 300s waiting for Excel to go
+> idle".  A timeout now logs a warning (with the last `Busy`/`Ready` state) and
+> continues, and the default `--idle-timeout` is 10s (was 300s).
 > (2026-11-11) Added a second, more detailed event log for
 > `run_aa_workbook.py`: `aa_event_log.csv` next to the AA file, three columns
 > (`datetime`, `event`, `phase`), created on first use then appended.  Logs the
