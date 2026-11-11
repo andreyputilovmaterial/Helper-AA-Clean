@@ -1,6 +1,15 @@
 # Project Context — Helper-AA-Clean
 
 > Last updated: 2026-11-11
+> (2026-11-11) Restructured and expanded `README.md`: a top-level "two
+> programs" table, one section per program with purpose + expected output,
+> the `--program` keys for `run_aa_workbook` (`commit_save`, `reload`,
+> `validate`, `auto_apply_aa`, `auto_reload_aa`), the two log files
+> (`aa_run_log.csv` / `aa_event_log.csv`), and per-program setup steps
+> (venv + `requirements-clean-aa.txt` / `requirements-run-aa.txt` + run).
+> (2026-11-11) Reordered the README sections so "Automate running" is section
+> 1 and "Purge / clean backups" is section 2 (intro table and Setup order
+> swapped to match).
 > (2026-11-11) Split the single `auto` program into `auto_apply_aa` and
 > `auto_reload_aa`.  Both run the same commit/save -> reload -> commit/save
 > cycle.  `auto_reload_aa` keeps the old behaviour (the second commit/save's
