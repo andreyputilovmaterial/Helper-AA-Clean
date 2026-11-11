@@ -120,6 +120,26 @@ The `auto` action runs commit/save -> reload -> commit/save with these rules:
 Any other modal prompt (not listed above) still blocks the run, because there
 is nobody to click it.
 
+### Logging
+
+Every action that actually runs appends one row to a CSV log
+(`aa_run_log.csv`) in the same directory as the AA file (the original input,
+not the working copy):
+
+| Column | Meaning |
+| --- | --- |
+| `datetime` | when the action was invoked |
+| `program` | `commit/save`, `(re)load`, `run validation`, or `auto` |
+| `aa_file` | path to the AA Excel file |
+| `data_file` | path to the data file (from `Main`!C13) |
+| `result` | `success` or the exception message |
+| `validation_details` | message box text plus `AnalysisValidation` sheet when a validation failed |
+
+The file is created on first use and appended to afterwards.  For `auto`, the
+`validation_details` column holds the first validation failure in the cycle:
+the first commit/save's failure stops the run, otherwise the second
+commit/save's expected failure, or empty if none failed.
+
 ### Working copy
 
 Before launching Excel, the script copies the input next to itself as

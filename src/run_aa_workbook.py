@@ -57,6 +57,15 @@ The path to the external data file is read from cell ``C13`` on the
 missing), and after a successful commit/save the script verifies the file was
 modified during the save.
 
+Logging
+-------
+Every action that actually runs appends one row to a CSV log
+(``aa_run_log.csv``) in the same directory as the AA file.  Columns are
+``datetime``, ``program`` (commit/save, (re)load, run validation, auto),
+``aa_file``, ``data_file``, ``result`` (``success`` or the exception message),
+and ``validation_details`` (the message box text plus the
+``AnalysisValidation`` sheet when a validation failed).
+
 Windows only
 ------------
 This uses COM automation, so it runs on Windows with Excel installed and
@@ -65,13 +74,14 @@ import is delayed so ``--help`` and ``--dry-run`` still work.
 """
 
 import argparse
+import csv
 import shutil
 import sys
 import threading
 import time
 import traceback
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 
@@ -108,6 +118,25 @@ AUTO = "auto"
 #: ``Main``!C13 before any action runs (pre-step #0) and shared globally so
 #: every part of the run can use it.
 DATA_FILE_PATH = None
+
+# CSV log written next to the AA file: one row per action run.
+LOG_FILENAME = "aa_run_log.csv"
+LOG_HEADER = [
+    "datetime",
+    "program",
+    "aa_file",
+    "data_file",
+    "result",
+    "validation_details",
+]
+
+# Column 2 values (the four programs/actions the script can run).
+PROGRAM_NAMES = {
+    RELOAD: "(re)load",
+    COMMIT_SAVE: "commit/save",
+    VALIDATE: "run validation",
+    AUTO: "auto",
+}
 
 
 @dataclass(frozen=True)
@@ -270,6 +299,12 @@ def plan_steps(actions=ACTIONS, skip=(), macro_overrides=None):
             Step(step.key, step.label, macro_overrides.get(step.key, step.macro))
         )
     return planned
+
+
+def plan_actions(actions=ACTIONS, skip=()):
+    """Return the top-level action keys to run after applying ``skip``."""
+    skip = set(skip or ())
+    return [key for key in actions if key not in skip]
 
 
 def _import_win32com():
@@ -438,6 +473,33 @@ def read_sheet_text(workbook, sheet_name):
     return "\n".join(lines)
 
 
+def format_validation_details(dialog_text, sheet_text=""):
+    """Combine a validation message box with the AnalysisValidation sheet text."""
+    if sheet_text:
+        return f"{dialog_text}\n--- AnalysisValidation sheet ---\n{sheet_text}"
+    return dialog_text
+
+
+def write_log_row(log_path, program, aa_file, data_file, result, validation_details, now=None):
+    """Append one CSV log row, writing the header first if the file is new/empty."""
+    now = now or datetime.now()
+    row = [
+        now.strftime("%Y-%m-%d %H:%M:%S"),
+        program,
+        str(aa_file),
+        str(data_file) if data_file is not None else "",
+        result,
+        validation_details,
+    ]
+    log_path = Path(log_path)
+    write_header = not log_path.exists() or log_path.stat().st_size == 0
+    with open(log_path, "a", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        if write_header:
+            writer.writerow(LOG_HEADER)
+        writer.writerow(row)
+
+
 def _first_record(records, key):
     """Return the first :class:`DialogRecord` for ``key``, or ``None``."""
     for record in records:
@@ -447,7 +509,10 @@ def _first_record(records, key):
 
 
 def evaluate_step_outcome(step, records, before_mtime, workbook):
-    """Check a finished step's message-box records and raise on failure.
+    """Check a finished step's message-box records; return details or raise.
+
+    Returns the step's validation-details text (``""`` when there was no
+    validation failure) on success, and raises on failure.
 
     Success is judged by which message box the macro showed:
 
@@ -464,22 +529,26 @@ def evaluate_step_outcome(step, records, before_mtime, workbook):
     The one exception is the second commit/save of the ``auto`` cycle
     (``step.context == AUTO_COMMIT_SECOND``): that commit/save is expected to
     fail validation, so its ``Validation Error`` box is treated as success
-    rather than failure.
+    rather than failure (its details are returned for the log).
     """
     if step.key == RELOAD:
-        return
+        return ""
 
     if step.context == AUTO_COMMIT_SECOND:
-        if _first_record(records, "validation_error") is not None:
+        error_record = _first_record(records, "validation_error")
+        if error_record is not None:
             print("auto: second commit/save failed validation as expected (success)")
-            return
+            return format_validation_details(
+                error_record.captured_text,
+                read_sheet_text(workbook, ANALYSIS_VALIDATION_SHEET),
+            )
         if _first_record(records, "save_success") is None:
             raise RuntimeError(
                 "auto: second commit/save completed without an expected "
                 "message ('Save Successful' or the expected 'Validation "
                 "Error')"
             )
-        return
+        return ""
 
     error_record = _first_record(records, "validation_error")
     if error_record is not None:
@@ -493,7 +562,7 @@ def evaluate_step_outcome(step, records, before_mtime, workbook):
                 "'Your Analysis Specifications have been saved'"
             )
         verify_data_file_recently_edited(DATA_FILE_PATH, before_mtime)
-        return
+        return ""
 
     if step.key == VALIDATE:
         if _first_record(records, "validation_success") is None:
@@ -501,7 +570,7 @@ def evaluate_step_outcome(step, records, before_mtime, workbook):
                 "validation completed without the success message "
                 "'Validation Complete! No Errors found!'"
             )
-        return
+        return ""
 
 
 def _import_win32gui():
@@ -608,7 +677,11 @@ class DialogWatcher:
 
 
 def run_step(xl, workbook, workbook_name, step, idle_timeout, settle_seconds):
-    """Run one step's macro, dismissing and recording its message boxes."""
+    """Run one step's macro, dismissing and recording its message boxes.
+
+    Returns the step's validation-details text (``""`` if none); raises on
+    failure.
+    """
     dialogs = STEP_DIALOGS.get(step.key, ())
 
     before_mtime = None
@@ -618,12 +691,15 @@ def run_step(xl, workbook, workbook_name, step, idle_timeout, settle_seconds):
     with DialogWatcher(dialogs) as watcher:
         run_macro(xl, workbook_name, step.macro, idle_timeout, settle_seconds)
 
-    evaluate_step_outcome(step, watcher.records, before_mtime, workbook)
+    return evaluate_step_outcome(step, watcher.records, before_mtime, workbook)
 
 
 def run_workbook(
     path,
-    steps,
+    actions,
+    macro_overrides=None,
+    log_path=None,
+    aa_file=None,
     visible=False,
     read_only=False,
     save=True,
@@ -631,13 +707,17 @@ def run_workbook(
     idle_timeout=IDLE_TIMEOUT_DEFAULT,
     settle_seconds=SETTLE_SECONDS_DEFAULT,
 ):
-    """Open ``path``, run each step's macro in order, then save and close.
+    """Open ``path`` and run each action in order, logging one CSV row each.
 
-    Before any step runs it reads the data-file path from ``Main``!C13
-    into the module global ``DATA_FILE_PATH`` (pre-step #0).  Returns the
-    number of steps that ran.  When ``leave_open`` is true the workbook and
-    Excel instance are left open (for debugging); otherwise they are closed in
-    a ``finally`` block even if a step raises.
+    ``actions`` is a sequence of top-level action keys (``auto`` runs its full
+    cycle as one logged action).  Before anything runs, the data-file path is
+    read from ``Main``!C13 into the module global ``DATA_FILE_PATH`` (pre-step
+    #0).  Each action's result and any validation details are appended to
+    ``log_path``; a failure is logged and then re-raised so the run still
+    stops with an exception.  Returns the number of leaf steps run.  When
+    ``leave_open`` is true the workbook and Excel instance are left open (for
+    debugging); otherwise they are closed in a ``finally`` block even if an
+    action raises.
     """
     global DATA_FILE_PATH
 
@@ -662,11 +742,58 @@ def run_workbook(
         DATA_FILE_PATH = read_data_file_path(workbook)
         print(f"data file: {DATA_FILE_PATH}")
 
+        aa_file = aa_file if aa_file is not None else Path(path)
+
         ran = 0
-        for step in steps:
-            print(f"Step {step.label}:")
-            run_step(xl, workbook, workbook_name, step, idle_timeout, settle_seconds)
-            ran += 1
+        for action_key in actions:
+            program = PROGRAM_NAMES.get(action_key, action_key)
+            started = datetime.now()
+            try:
+                validation_details = ""
+                for step in plan_steps([action_key], macro_overrides=macro_overrides):
+                    print(f"Step {step.label}:")
+                    step_details = run_step(
+                        xl, workbook, workbook_name, step, idle_timeout, settle_seconds
+                    )
+                    if step_details:
+                        validation_details = step_details
+                    ran += 1
+            except ValidationError as exc:
+                if log_path is not None:
+                    write_log_row(
+                        log_path,
+                        program,
+                        aa_file,
+                        DATA_FILE_PATH,
+                        str(exc),
+                        format_validation_details(
+                            exc.dialog_text, exc.analysis_validation_text
+                        ),
+                        now=started,
+                    )
+                raise
+            except Exception as exc:
+                if log_path is not None:
+                    write_log_row(
+                        log_path,
+                        program,
+                        aa_file,
+                        DATA_FILE_PATH,
+                        str(exc),
+                        "",
+                        now=started,
+                    )
+                raise
+            if log_path is not None:
+                write_log_row(
+                    log_path,
+                    program,
+                    aa_file,
+                    DATA_FILE_PATH,
+                    "success",
+                    validation_details,
+                    now=started,
+                )
 
         if save and not read_only:
             print("saving workbook")
@@ -781,11 +908,12 @@ def main(argv=None):
         if value:
             macro_overrides[step.key] = value
 
-    steps = plan_steps(ACTIONS, skip=args.skip, macro_overrides=macro_overrides)
-    if not steps:
-        print("no steps to run (all skipped)")
+    actions = plan_actions(ACTIONS, skip=args.skip)
+    if not actions:
+        print("no actions to run (all skipped)")
         return 0
 
+    steps = plan_steps(actions, macro_overrides=macro_overrides)
     print(f"{parser.prog}: {path}")
     for step in steps:
         print(f"  - {step.label} ({step.macro})")
@@ -798,9 +926,15 @@ def main(argv=None):
         working_path = make_working_copy(path)
         print(f"working copy: {working_path}")
 
+        log_path = path.parent / LOG_FILENAME
+        print(f"log: {log_path}")
+
         ran = run_workbook(
             working_path,
-            steps,
+            actions,
+            macro_overrides=macro_overrides,
+            log_path=log_path,
+            aa_file=path,
             visible=args.visible,
             read_only=args.read_only,
             save=not args.no_save,

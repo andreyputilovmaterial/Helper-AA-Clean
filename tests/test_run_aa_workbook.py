@@ -1,6 +1,7 @@
+import csv
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -106,6 +107,21 @@ def test_plan_steps_auto_labels_are_prefixed():
 
 def test_plan_steps_all_skipped_is_empty():
     assert ruw.plan_steps(skip=list(ruw.ACTIONS)) == []
+
+
+def test_plan_actions_returns_all_by_default():
+    assert ruw.plan_actions() == ["reload", "commit_save", "validate", "auto"]
+
+
+def test_plan_actions_skips():
+    assert ruw.plan_actions(skip=["auto", "reload"]) == ["commit_save", "validate"]
+
+
+def test_program_names_mapping():
+    assert ruw.PROGRAM_NAMES[ruw.COMMIT_SAVE] == "commit/save"
+    assert ruw.PROGRAM_NAMES[ruw.RELOAD] == "(re)load"
+    assert ruw.PROGRAM_NAMES[ruw.VALIDATE] == "run validation"
+    assert ruw.PROGRAM_NAMES[ruw.AUTO] == "auto"
 
 
 # --- wait_for_excel_idle ----------------------------------------------------
@@ -308,6 +324,52 @@ def test_verify_data_file_recently_edited_raises_when_unchanged(tmp_path):
         ruw.verify_data_file_recently_edited(target, before)
 
 
+# --- logging helpers ---------------------------------------------------------
+
+def test_format_validation_details_without_sheet():
+    assert ruw.format_validation_details("msg") == "msg"
+
+
+def test_format_validation_details_with_sheet():
+    assert ruw.format_validation_details("msg", "s1\ns2") == (
+        "msg\n--- AnalysisValidation sheet ---\ns1\ns2"
+    )
+
+
+def test_write_log_row_creates_header_and_row(tmp_path):
+    log = tmp_path / "aa_run_log.csv"
+    now = datetime(2026, 11, 11, 12, 34, 56)
+    ruw.write_log_row(
+        log, "auto", "/x/AA.xlsm", "/x/data.xlsm", "success", "details", now=now
+    )
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "datetime,program,aa_file,data_file,result,validation_details",
+        "2026-11-11 12:34:56,auto,/x/AA.xlsm,/x/data.xlsm,success,details",
+    ]
+
+
+def test_write_log_row_appends_without_second_header(tmp_path):
+    log = tmp_path / "aa_run_log.csv"
+    now = datetime(2026, 11, 11, 12, 0, 0)
+    ruw.write_log_row(log, "commit/save", "a", "b", "success", "", now=now)
+    ruw.write_log_row(log, "auto", "a", "b", "boom", "", now=now)
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert lines[0].startswith("datetime,program")
+    assert len(lines) == 3
+    assert "boom" in lines[2]
+
+
+def test_write_log_row_escapes_csv_specials(tmp_path):
+    log = tmp_path / "aa_run_log.csv"
+    now = datetime(2026, 11, 11, 12, 0, 0)
+    details = 'a,b\n"c"'
+    ruw.write_log_row(log, "auto", "a", "b", "success", details, now=now)
+    with open(log, newline="", encoding="utf-8") as handle:
+        rows = list(csv.reader(handle))
+    assert rows[0] == ruw.LOG_HEADER
+    assert rows[1][5] == details
+
+
 # --- evaluate_step_outcome ---------------------------------------------------
 
 def step(key):
@@ -431,6 +493,19 @@ def test_evaluate_auto_second_commit_validation_failure_is_success():
     ruw.evaluate_step_outcome(
         auto_second_commit_step(), [err], None, FakeSheetWorkbook(None)
     )
+
+
+def test_evaluate_auto_second_commit_validation_failure_returns_details():
+    err = ruw.DialogRecord(
+        dialog=ruw.VALIDATION_ERROR_DIALOG,
+        captured_text="An error occured while processing your specifications.",
+        matched_caption="Validation Error",
+    )
+    details = ruw.evaluate_step_outcome(
+        auto_second_commit_step(), [err], None, FakeSheetWorkbook(("a", "b"))
+    )
+    assert "An error occured" in details
+    assert "AnalysisValidation sheet" in details
 
 
 def test_evaluate_auto_second_commit_save_success_is_success():

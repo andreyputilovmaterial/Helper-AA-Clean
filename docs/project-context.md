@@ -32,6 +32,10 @@
 > naming.
 > (2026-11-11) Clarified the `auto` pass/fail rules: the second commit/save's
 > expected validation failure is the success signal; all other errors fail.
+> (2026-11-11) Added CSV logging: each action appends a row to
+> `aa_run_log.csv` next to the AA file (datetime, program, aa_file, data_file,
+> result, validation_details). `auto` logs one row with the first validation
+> failure of its cycle.
 
 ## 1. Purpose
 
@@ -92,6 +96,10 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
   into the module global `DATA_FILE_PATH` (a `Path`), its existence is
   verified, and after commit/save the file's mtime must advance (the
   "recently edited" check).
+- **CSV log next to the AA file.** Each action appends one row to
+  `aa_run_log.csv` (created on first use) with datetime, program, aa_file,
+  data_file, result, and validation_details. `auto` is logged as one row with
+  the first validation failure of its cycle.
 
 ## 4. Findings / gotchas
 
