@@ -606,14 +606,33 @@ def _enumerate_visible_windows(win32gui):
     return windows
 
 
+def _click_dialog(win32gui, win32con, hwnd, action):
+    """Dismiss a message box by posting IDOK/IDCANCEL plus a button click.
+
+    ``PostMessage`` is used (rather than ``SendMessage``) so the watcher
+    thread never blocks waiting for Excel's message pump; the dialog is
+    dismissed asynchronously and the next poll sees it gone.  Posting both
+    ``WM_COMMAND`` and ``BM_CLICK`` covers message boxes that only honour one
+    of the two.
+    """
+    command = win32con.IDOK if action == "ok" else win32con.IDCANCEL
+    win32gui.PostMessage(hwnd, win32con.WM_COMMAND, command, 0)
+    try:
+        button = win32gui.GetDlgItem(hwnd, command)
+        if button:
+            win32gui.PostMessage(button, win32con.BM_CLICK, 0, 0)
+    except Exception:
+        pass
+
+
 class DialogWatcher:
     """Watch for known message boxes and click their buttons in a thread.
 
     ``Application.Run`` blocks while a modal ``MsgBox`` is on screen, so the
     dialog must be dismissed from another thread.  Start the watcher before
-    calling the macro; it polls for the configured dialogs and sends
-    ``WM_COMMAND`` (IDOK / IDCANCEL) to the matching window.  Dismissed
-    dialogs are collected in :attr:`records`.
+    calling the macro; it polls for the configured dialogs and posts
+    ``WM_COMMAND`` (IDOK / IDCANCEL) plus a ``BM_CLICK`` to the matching
+    window.  Dismissed dialogs are collected in :attr:`records`.
     """
 
     def __init__(self, dialogs, poll_interval=DIALOG_POLL_INTERVAL):
@@ -648,19 +667,18 @@ class DialogWatcher:
 
     def _run(self):
         win32gui, win32con = _import_win32gui()
-        handled = set()
+        recorded = set()
         while not self._stop.is_set():
             for hwnd, caption, text in _enumerate_visible_windows(win32gui):
-                if hwnd in handled:
-                    continue
                 dialog = find_dialog(caption, text, self.dialogs)
                 if dialog is None:
                     continue
-                handled.add(hwnd)
-                command = win32con.IDOK if dialog.action == "ok" else win32con.IDCANCEL
-                win32gui.SendMessage(hwnd, win32con.WM_COMMAND, command, 0)
-                if dialog.capture:
-                    self.records.append(DialogRecord(dialog, text, caption))
+                if hwnd not in recorded:
+                    recorded.add(hwnd)
+                    print(f"dialog watcher: dismissing {dialog.key!r} ({caption!r})")
+                    if dialog.capture:
+                        self.records.append(DialogRecord(dialog, text, caption))
+                _click_dialog(win32gui, win32con, hwnd, dialog.action)
             time.sleep(self.poll_interval)
 
 

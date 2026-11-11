@@ -1,6 +1,10 @@
 # Project Context — Helper-AA-Clean
 
 > Last updated: 2026-11-11
+> (2026-11-11) Fixed `DialogWatcher`: click message boxes with `PostMessage`
+> (`WM_COMMAND` IDOK/IDCANCEL) plus a `BM_CLICK` on the button, retrying every
+> poll while the dialog is still open (the old `SendMessage` + single-shot
+> approach could leave the "Save Successful" box unclicked).
 > (2026-11-11) Reorganized `src/` into one package directory per tool:
 > `src/clean_aa_backups/` (openpyxl) and `src/run_aa_workbook/` (pywin32), each
 > with its own module and `__init__.py`. Tests now import via
@@ -118,8 +122,9 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
   `plan_steps()`.
 - **Message boxes are dismissed from a background thread.** `Application.Run`
   blocks on modal `MsgBox`s, so a `DialogWatcher` thread matches them by
-  title/text and sends `WM_COMMAND` (IDOK/IDCANCEL); validation-error text and
-  the `AnalysisValidation` sheet are captured for the failure report.
+  title/text and posts `WM_COMMAND` (IDOK/IDCANCEL) plus a `BM_CLICK` on the
+  button, retrying while the dialog stays open; validation-error text and the
+  `AnalysisValidation` sheet are captured for the failure report.
 - **Pre-step #0 reads the data file path.** Cell `C13` on `Main` is read
   into the module global `DATA_FILE_PATH` (a `Path`), its existence is
   verified, and after commit/save the file's mtime must advance (the

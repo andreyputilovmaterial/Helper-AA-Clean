@@ -90,7 +90,8 @@ hand work off asynchronously.
 ### Message boxes and pass/fail detection
 
 The macros show modal `MsgBox` prompts.  A `DialogWatcher` thread matches them
-by window title/text and sends `WM_COMMAND` (IDOK / IDCANCEL) to dismiss them,
+by window title/text and posts `WM_COMMAND` (IDOK / IDCANCEL) plus a `BM_CLICK`
+on the button to dismiss them, retrying while the dialog is still open and
 recording the text of the dialogs that matter:
 
 | Action | Success dialog | Failure dialog |
