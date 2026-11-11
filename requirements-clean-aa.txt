@@ -1,0 +1,4 @@
+# Dependencies for clean_aa_backups.py.
+
+# openpyxl >= 3.1 is required for keep_vba=True when re-saving .xlsm workbooks.
+openpyxl>=3.1

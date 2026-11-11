@@ -151,7 +151,8 @@ previous working copy from the same day is overwritten.
 Requirements (Windows only):
 
 - Excel installed.
-- [pywin32](https://pypi.org/project/pywin32/) — `pip install pywin32`.
+- [pywin32](https://pypi.org/project/pywin32/) —
+  `pip install -r requirements-run-aa.txt`.
 
 The `win32com` import is lazy, so `--help` and the test suite run without
 pywin32 (e.g. on macOS).

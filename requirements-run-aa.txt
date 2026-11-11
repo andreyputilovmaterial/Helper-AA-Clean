@@ -1,0 +1,5 @@
+# Dependencies for run_aa_workbook.py (Windows only).
+
+# Excel COM automation (win32com.client) and the message-box dialog watcher
+# (win32gui / win32con) all ship in pywin32.
+pywin32>=306

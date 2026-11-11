@@ -1,6 +1,9 @@
 # Project Context — Helper-AA-Clean
 
 > Last updated: 2026-11-11
+> (2026-11-11) Split `requirements.txt` into `requirements-clean-aa.txt`
+> (openpyxl) and `requirements-run-aa.txt` (pywin32) so each tool's dependency
+> can be installed independently.
 > (2026-11-11) Slimmed `run_aa_workbook.py`'s CLI: removed `--read-only`,
 > `--no-save`, `--dry-run`, and the `--macro-<step>` overrides. Macro names are
 > hardcoded in `STEPS`. The workbook is now saved explicitly after every

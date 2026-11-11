@@ -20,9 +20,10 @@ python src/run_aa_workbook.py --program validate path/to/file.xlsm
 
 - Python 3
 - `clean_aa_backups.py`: [openpyxl](https://pypi.org/project/openpyxl/) —
-  `pip install openpyxl`
+  `pip install -r requirements-clean-aa.txt`
 - `run_aa_workbook.py` (Windows only): Excel and
-  [pywin32](https://pypi.org/project/pywin32/) — `pip install pywin32`
+  [pywin32](https://pypi.org/project/pywin32/) —
+  `pip install -r requirements-run-aa.txt`
 
 ## Documentation
 
