@@ -1,7 +1,14 @@
 # Project Context — Helper-AA-Clean
 
 > Last updated: 2026-11-11
-> (2026-11-11) Fixed `DialogWatcher`: click message boxes with `PostMessage`
+> (2026-11-11) Fixed the dialog click again: `DialogWatcher` now clicks the
+> actual OK/Cancel button. Standard `#32770` message boxes are clicked via
+> `BM_CLICK`/`WM_COMMAND`; non-standard dialogs (VBA UserForms, whose buttons
+> do not carry `IDOK`/`IDCANCEL` and ignore `BM_CLICK`) are handled by locating
+> the button child window and sending it a real mouse click. The watcher also
+> prints the window class and child windows when it first matches a dialog,
+> for diagnosis.
+> (2026-11-11) Earlier attempt: click message boxes with `PostMessage`
 > (`WM_COMMAND` IDOK/IDCANCEL) plus a `BM_CLICK` on the button, retrying every
 > poll while the dialog is still open (the old `SendMessage` + single-shot
 > approach could leave the "Save Successful" box unclicked).
@@ -122,8 +129,11 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
   `plan_steps()`.
 - **Message boxes are dismissed from a background thread.** `Application.Run`
   blocks on modal `MsgBox`s, so a `DialogWatcher` thread matches them by
-  title/text and posts `WM_COMMAND` (IDOK/IDCANCEL) plus a `BM_CLICK` on the
-  button, retrying while the dialog stays open; validation-error text and the
+  title/text and clicks the actual OK/Cancel button, retrying while the dialog
+  stays open. Standard `#32770` message boxes are clicked via `BM_CLICK` /
+  `WM_COMMAND`; non-standard dialogs (VBA UserForms, whose buttons lack
+  `IDOK`/`IDCANCEL` and ignore `BM_CLICK`) are clicked by locating the button
+  child window and sending it a mouse click. Validation-error text and the
   `AnalysisValidation` sheet are captured for the failure report.
 - **Pre-step #0 reads the data file path.** Cell `C13` on `Main` is read
   into the module global `DATA_FILE_PATH` (a `Path`), its existence is

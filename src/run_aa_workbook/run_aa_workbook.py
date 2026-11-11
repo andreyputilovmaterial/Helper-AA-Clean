@@ -266,6 +266,50 @@ STEP_DIALOGS = {
     VALIDATE: (VALIDATION_SUCCESS_DIALOG, VALIDATION_ERROR_DIALOG),
 }
 
+# Control ids used by standard Win32 dialogs (kept as plain ints so the
+# button-locating logic stays testable without pywin32).
+WIN32_IDOK = 1
+WIN32_IDCANCEL = 2
+WIN32_IDYES = 6
+WIN32_IDNO = 7
+
+# Button captions used to locate the OK/Cancel button on non-standard dialogs
+# (VBA UserForms / MSForms), where the button does not carry IDOK/IDCANCEL.
+OK_LABELS = ("ok", "yes", "continue", "finish", "done")
+CANCEL_LABELS = ("cancel", "no")
+BUTTON_CLASS_MARKERS = ("button",)
+
+
+def find_button_child(children, action):
+    """Return the child most likely to be the OK/Cancel button, or ``None``.
+
+    ``children`` is a list of dicts with ``text``, ``class`` and ``id`` keys
+    (the shape produced by :func:`_child_windows`).  ``action`` is ``"ok"``
+    or ``"cancel"``.  Preference order: a child carrying a standard Win32
+    control id (IDOK/IDYES for OK, IDCANCEL/IDNO for Cancel), then a child
+    whose caption is a known OK/Yes or Cancel/No label, then any child whose
+    window class suggests a button.
+    """
+    wanted_ids = (
+        (WIN32_IDOK, WIN32_IDYES)
+        if action == "ok"
+        else (WIN32_IDCANCEL, WIN32_IDNO)
+    )
+    labels = OK_LABELS if action == "ok" else CANCEL_LABELS
+
+    for child in children:
+        if child.get("id") in wanted_ids:
+            return child
+    for child in children:
+        label = (child.get("text") or "").strip().lower().rstrip(".")
+        if label in labels:
+            return child
+    for child in children:
+        class_name = (child.get("class") or "").lower()
+        if any(marker in class_name for marker in BUTTON_CLASS_MARKERS):
+            return child
+    return None
+
 
 def plan_steps(actions):
     """Return the ordered leaf steps for the given action keys.
@@ -606,23 +650,123 @@ def _enumerate_visible_windows(win32gui):
     return windows
 
 
-def _click_dialog(win32gui, win32con, hwnd, action):
-    """Dismiss a message box by posting IDOK/IDCANCEL plus a button click.
-
-    ``PostMessage`` is used (rather than ``SendMessage``) so the watcher
-    thread never blocks waiting for Excel's message pump; the dialog is
-    dismissed asynchronously and the next poll sees it gone.  Posting both
-    ``WM_COMMAND`` and ``BM_CLICK`` covers message boxes that only honour one
-    of the two.
-    """
-    command = win32con.IDOK if action == "ok" else win32con.IDCANCEL
-    win32gui.PostMessage(hwnd, win32con.WM_COMMAND, command, 0)
+def _window_class(win32gui, hwnd):
+    """Return the window class name for ``hwnd`` (``""`` on failure)."""
     try:
-        button = win32gui.GetDlgItem(hwnd, command)
-        if button:
-            win32gui.PostMessage(button, win32con.BM_CLICK, 0, 0)
+        return win32gui.GetClassName(hwnd) or ""
+    except Exception:
+        return ""
+
+
+def _child_windows(win32gui, hwnd):
+    """Return the children of ``hwnd`` as ``{hwnd, text, class, id}`` dicts.
+
+    ``id`` is the control id (``GetDlgCtrlID``); it is 0 for controls that do
+    not use the standard Win32 dialog control-id scheme (e.g. VBA UserForm
+    buttons).
+    """
+    children = []
+
+    def collect(child, _extra):
+        try:
+            children.append(
+                {
+                    "hwnd": child,
+                    "text": win32gui.GetWindowText(child) or "",
+                    "class": win32gui.GetClassName(child) or "",
+                    "id": win32gui.GetDlgCtrlID(child),
+                }
+            )
+        except Exception:
+            pass
+        return True
+
+    try:
+        win32gui.EnumChildWindows(hwnd, collect, None)
     except Exception:
         pass
+    return children
+
+
+def _send_message(win32gui, hwnd, message, wparam, lparam):
+    """Send one window message, ignoring failures (the watcher retries)."""
+    try:
+        return win32gui.SendMessage(hwnd, message, wparam, lparam)
+    except Exception:
+        return 0
+
+
+def _click_dialog(win32gui, win32con, hwnd, action):
+    """Dismiss ``hwnd`` by clicking its OK/Cancel button.
+
+    Standard Win32 message boxes (window class ``#32770``) expose the button
+    through ``GetDlgItem(IDOK/IDCANCEL)``; those are clicked with ``BM_CLICK``
+    plus the matching ``WM_COMMAND``.  Yes/No (or Retry/Cancel) message boxes
+    use ``IDYES``/``IDNO`` instead, so the button is located among the child
+    windows.  Non-standard dialogs (VBA UserForms / MSForms) do not carry the
+    standard ids and ignore ``BM_CLICK``, so their button is located by control
+    id / caption / class and clicked with a real mouse click.  ``SendMessage``
+    is used so each click is processed before the next poll; the watcher
+    retries while the dialog is still visible.
+    """
+    command = win32con.IDOK if action == "ok" else win32con.IDCANCEL
+    class_name = _window_class(win32gui, hwnd)
+    children = _child_windows(win32gui, hwnd)
+
+    if class_name == "#32770":
+        target = None
+        try:
+            button = win32gui.GetDlgItem(hwnd, command)
+        except Exception:
+            button = 0
+        if button:
+            target = {"hwnd": button, "id": command}
+        else:
+            # Yes/No (or Retry/Cancel) message boxes use IDYES/IDNO rather
+            # than IDOK/IDCANCEL; find the button among the children instead.
+            target = find_button_child(children, action)
+
+        if target is not None:
+            target_hwnd = target["hwnd"]
+            _send_message(win32gui, target_hwnd, win32con.BM_CLICK, 0, 0)
+            _send_message(
+                win32gui,
+                hwnd,
+                win32con.WM_COMMAND,
+                target["id"],
+                target_hwnd,
+            )
+            return
+
+        _send_message(win32gui, hwnd, win32con.WM_COMMAND, command, 0)
+        return
+
+    target = find_button_child(children, action)
+    if target is not None:
+        target_hwnd = target["hwnd"]
+        _send_message(
+            win32gui,
+            target_hwnd,
+            win32con.WM_LBUTTONDOWN,
+            win32con.MK_LBUTTON,
+            0,
+        )
+        _send_message(win32gui, target_hwnd, win32con.WM_LBUTTONUP, 0, 0)
+        _send_message(win32gui, target_hwnd, win32con.BM_CLICK, 0, 0)
+        _send_message(
+            win32gui,
+            hwnd,
+            win32con.WM_COMMAND,
+            target["id"],
+            target_hwnd,
+        )
+        return
+
+    # Last resort: press Enter to trigger the dialog's default button, then
+    # send the classic IDOK/IDCANCEL command.
+    _send_message(win32gui, hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
+    _send_message(win32gui, hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
+    _send_message(win32gui, hwnd, win32con.WM_COMMAND, command, 0)
 
 
 class DialogWatcher:
@@ -630,9 +774,10 @@ class DialogWatcher:
 
     ``Application.Run`` blocks while a modal ``MsgBox`` is on screen, so the
     dialog must be dismissed from another thread.  Start the watcher before
-    calling the macro; it polls for the configured dialogs and posts
-    ``WM_COMMAND`` (IDOK / IDCANCEL) plus a ``BM_CLICK`` to the matching
-    window.  Dismissed dialogs are collected in :attr:`records`.
+    calling the macro; it polls for the configured dialogs and clicks their
+    OK/Cancel button (standard ``#32770`` message boxes via ``BM_CLICK`` /
+    ``WM_COMMAND``, VBA UserForms via a real mouse click on the button).
+    Dismissed dialogs are collected in :attr:`records`.
     """
 
     def __init__(self, dialogs, poll_interval=DIALOG_POLL_INTERVAL):
@@ -675,7 +820,16 @@ class DialogWatcher:
                     continue
                 if hwnd not in recorded:
                     recorded.add(hwnd)
-                    print(f"dialog watcher: dismissing {dialog.key!r} ({caption!r})")
+                    class_name = _window_class(win32gui, hwnd)
+                    children = _child_windows(win32gui, hwnd)
+                    child_summary = [
+                        (child["text"], child["class"], child["id"])
+                        for child in children
+                    ]
+                    print(
+                        f"dialog watcher: dismissing {dialog.key!r} ({caption!r}) "
+                        f"[class={class_name!r}, children={child_summary}]"
+                    )
                     if dialog.capture:
                         self.records.append(DialogRecord(dialog, text, caption))
                 _click_dialog(win32gui, win32con, hwnd, dialog.action)

@@ -172,6 +172,49 @@ def test_find_dialog_returns_none_when_no_match():
     assert ruw.find_dialog("Other", "Other text", [dialog(title="Overwrite?")]) is None
 
 
+# --- find_button_child ---------------------------------------------------------
+
+def child(hwnd, text="", class_name="", ctrl_id=0):
+    return {"hwnd": hwnd, "text": text, "class": class_name, "id": ctrl_id}
+
+
+def test_find_button_child_prefers_standard_control_id():
+    children = [
+        child(1, "OK", "ThunderCommandButton", ruw.WIN32_IDOK),
+        child(2, "Cancel", "ThunderCommandButton", ruw.WIN32_IDCANCEL),
+    ]
+    assert ruw.find_button_child(children, "ok")["hwnd"] == 1
+    assert ruw.find_button_child(children, "cancel")["hwnd"] == 2
+
+
+def test_find_button_child_recognises_yes_no_control_ids():
+    children = [
+        child(7, "Yes", "Button", ruw.WIN32_IDYES),
+        child(8, "No", "Button", ruw.WIN32_IDNO),
+    ]
+    assert ruw.find_button_child(children, "ok")["hwnd"] == 7
+    assert ruw.find_button_child(children, "cancel")["hwnd"] == 8
+
+
+def test_find_button_child_falls_back_to_caption():
+    children = [
+        child(3, "OK", "ThunderCommandButton"),
+        child(4, "Cancel", "ThunderCommandButton"),
+    ]
+    assert ruw.find_button_child(children, "ok")["hwnd"] == 3
+    assert ruw.find_button_child(children, "cancel")["hwnd"] == 4
+
+
+def test_find_button_child_falls_back_to_window_class():
+    children = [child(5, "Click here", "ThunderCommandButton")]
+    assert ruw.find_button_child(children, "ok")["hwnd"] == 5
+
+
+def test_find_button_child_returns_none_when_no_button():
+    assert ruw.find_button_child([], "ok") is None
+    assert ruw.find_button_child([child(6, "note", "Static")], "ok") is None
+
+
 # --- read_data_file_path ------------------------------------------------------
 
 class FakeCell:

@@ -90,9 +90,12 @@ hand work off asynchronously.
 ### Message boxes and pass/fail detection
 
 The macros show modal `MsgBox` prompts.  A `DialogWatcher` thread matches them
-by window title/text and posts `WM_COMMAND` (IDOK / IDCANCEL) plus a `BM_CLICK`
-on the button to dismiss them, retrying while the dialog is still open and
-recording the text of the dialogs that matter:
+by window title/text and clicks the OK/Cancel button to dismiss them, retrying
+while the dialog is still open and recording the text of the dialogs that
+matter.  Standard Win32 message boxes (window class `#32770`) are clicked via
+`BM_CLICK` / `WM_COMMAND`; VBA UserForms (whose buttons do not carry
+`IDOK`/`IDCANCEL` and ignore `BM_CLICK`) are handled by locating the button
+child window and sending it a real mouse click.
 
 | Action | Success dialog | Failure dialog |
 | --- | --- | --- |
