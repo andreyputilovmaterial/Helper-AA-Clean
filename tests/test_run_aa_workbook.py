@@ -1,4 +1,5 @@
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,49 @@ def test_run_macro_runs_qualified_name():
     xl = FakeExcel(ready=True, busy=False)
     ruw.run_macro(xl, "aaa.xlsm", "ApplyDefinitions", timeout=1, settle_seconds=0)
     assert xl.calls == ["'aaa.xlsm'!ApplyDefinitions"]
+
+
+# --- working copy ------------------------------------------------------------
+
+def test_working_copy_path_appends_date_to_stem(tmp_path):
+    src = tmp_path / "MyAA.xlsm"
+    dest = ruw.working_copy_path(src, today=date(2026, 11, 11))
+    assert dest == tmp_path / "MyAA-working-automated-2026-11-11.xlsm"
+
+
+def test_working_copy_path_keeps_extension_and_zero_padded_date(tmp_path):
+    src = tmp_path / "AA.xlsx"
+    dest = ruw.working_copy_path(src, today=date(2026, 1, 5))
+    assert dest == tmp_path / "AA-working-automated-2026-01-05.xlsx"
+
+
+def test_working_copy_path_is_in_same_directory_as_source(tmp_path):
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    src = sub / "AA.xlsm"
+    dest = ruw.working_copy_path(src, today=date(2026, 11, 11))
+    assert dest.parent == sub
+    assert dest == sub / "AA-working-automated-2026-11-11.xlsm"
+
+
+def test_make_working_copy_creates_copy_and_leaves_original(tmp_path):
+    src = tmp_path / "AA.xlsm"
+    src.write_bytes(b"v1")
+    dest = ruw.make_working_copy(src, today=date(2026, 11, 11))
+    assert dest.exists()
+    assert dest.read_bytes() == b"v1"
+    assert src.read_bytes() == b"v1"
+
+
+def test_make_working_copy_overwrites_existing_copy(tmp_path):
+    src = tmp_path / "AA.xlsm"
+    src.write_bytes(b"v1")
+    dest = ruw.make_working_copy(src, today=date(2026, 11, 11))
+
+    src.write_bytes(b"v2")
+    dest2 = ruw.make_working_copy(src, today=date(2026, 11, 11))
+    assert dest2 == dest
+    assert dest.read_bytes() == b"v2"
 
 
 # --- argument parsing -------------------------------------------------------

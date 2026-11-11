@@ -66,17 +66,29 @@ and validation — through `Excel.Application`, instead of clicking and waiting.
 
 Workflow:
 
-1. Create Excel via `win32com.client.DispatchEx("Excel.Application")` (hidden
+1. Copy the input to a working copy in the same directory
+   (`<name>-working-automated-YYYY-MM-DD.xlsm`), overwriting any existing
+   copy.  Every later step operates on that copy, never the original.
+2. Create Excel via `win32com.client.DispatchEx("Excel.Application")` (hidden
    unless `--visible`).
-2. Open the workbook (`DisplayAlerts` off, link updates off).
-3. Run each step's macro via `Application.Run("'file.xlsm'!Macro")`, in order.
-4. Wait for Excel to go idle (`Application.Ready` and not `Application.Busy`)
+3. Open the workbook (`DisplayAlerts` off, link updates off).
+4. Run each step's macro via `Application.Run("'file.xlsm'!Macro")`, in order.
+5. Wait for Excel to go idle (`Application.Ready` and not `Application.Busy`)
    after each macro, then an optional settle delay.
-5. Save (unless `--read-only` / `--no-save`) and close, or leave open with
+6. Save (unless `--read-only` / `--no-save`) and close, or leave open with
    `--leave-open`.
 
 `Application.Run` is synchronous; the idle poll is a safety net for macros that
 hand work off asynchronously.
+
+### Working copy
+
+Before launching Excel, the script copies the input next to itself as
+`<name>-working-automated-YYYY-MM-DD.xlsm` (same extension) and runs only
+against that copy.  The original is never opened or saved, so the macros'
+repeated saves (and any crash mid-run) leave the original untouched.  A
+previous working copy from the same day is overwritten.  `--dry-run` does not
+create the copy because it launches nothing.
 
 Requirements (Windows only):
 

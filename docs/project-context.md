@@ -16,6 +16,10 @@
 > `08-commit-messages` clinerule with `20-git-commit-messages-wording.md`,
 > `22-when-making-commits.md` and `29-github-issues.md` (skipped
 > `21-git-submodules-commits-order.md` — no submodules here).
+> (2026-11-11) `run_aa_workbook.py` now makes a working copy of the input
+> (`<name>-working-automated-YYYY-MM-DD.xlsm`, same dir, overwritten daily)
+> before running and operates only on that copy, so the VBA macros' repeated
+> saves never touch the original. `--dry-run` does not create the copy.
 
 ## 1. Purpose
 

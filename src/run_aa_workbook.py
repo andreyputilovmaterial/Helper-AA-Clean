@@ -11,6 +11,11 @@ error-prone.  This script opens the workbook with ``Excel.Application``
 (pywin32 / ``win32com.client``) and calls the same VBA procedures those
 buttons call, in order, waiting for Excel to go idle after each one.
 
+Before running anything it makes a working copy of the input file next to
+the original (``<name>-working-automated-YYYY-MM-DD.xlsm``) and runs only
+against that copy, so the original is never touched even though the macros
+save repeatedly.
+
 Macro names
 -----------
 The entry points below (``ApplyDefinitions``, ``LoadDefinitions``,
@@ -29,10 +34,12 @@ import is delayed so ``--help`` and ``--dry-run`` still work.
 """
 
 import argparse
+import shutil
 import sys
 import time
 import traceback
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 
@@ -101,6 +108,33 @@ def _import_win32com():
             "Install it with: pip install pywin32"
         ) from exc
     return win32com_client
+
+
+def working_copy_path(path, today=None):
+    """Path of the automated working copy for ``path``.
+
+    The copy lives next to the original and is named
+    ``<stem>-working-automated-YYYY-MM-DD<suffix>``, e.g.
+    ``MyAA-working-automated-2026-11-11.xlsm``.  The date is the run date,
+    or ``today`` (a ``datetime.date``) when provided for testing.
+    """
+    path = Path(path)
+    today = today or date.today()
+    return path.with_name(
+        f"{path.stem}-working-automated-{today:%Y-%m-%d}{path.suffix}"
+    )
+
+
+def make_working_copy(path, today=None):
+    """Copy ``path`` to its working copy, overwriting any existing copy.
+
+    The original ``path`` is left untouched; the run works only on the
+    returned copy, so the VBA macros' repeated saves never touch the
+    original.  Returns the working copy path.
+    """
+    dest = working_copy_path(path, today=today)
+    shutil.copy2(path, dest)
+    return dest
 
 
 def wait_for_excel_idle(xl, timeout, poll_interval=IDLE_POLL_INTERVAL):
@@ -303,8 +337,11 @@ def main(argv=None):
         return 0
 
     try:
+        working_path = make_working_copy(path)
+        print(f"working copy: {working_path}")
+
         ran = run_workbook(
-            path,
+            working_path,
             steps,
             visible=args.visible,
             read_only=args.read_only,
