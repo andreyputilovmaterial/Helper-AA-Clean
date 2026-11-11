@@ -11,6 +11,11 @@
 > automate the AA workbook's VBA buttons (apply definitions, load definitions,
 > run validation) instead of clicking and waiting. Macro names are placeholders
 > until the real VBA procedure names are known.
+> (2026-11-11) Documentation split: README is now entry-level only; full
+> technical docs moved to `docs/architecture.md` (stable). Replaced the
+> `08-commit-messages` clinerule with `20-git-commit-messages-wording.md`,
+> `22-when-making-commits.md` and `29-github-issues.md` (skipped
+> `21-git-submodules-commits-order.md` — no submodules here).
 
 ## 1. Purpose
 
@@ -19,13 +24,17 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
 
 ## 2. Layout
 
+- `README.md` — entry-level overview only (links to `docs/architecture.md`).
+- `docs/architecture.md` — stable technical documentation (full docs).
+- `docs/project-context.md` — living working memory (this file; not stable).
 - `src/clean_aa_backups.py` — the whole tool (single file, no build step).
 - `src/run_aa_workbook.py` — Windows-only COM automation of the AA run steps.
 - `tests/test_clean_aa_backups.py` — pytest suite.
 - `tests/test_run_aa_workbook.py` — pytest suite for step planning / wait logic
   (no COM needed, so it runs on any OS).
 - `.clinerules/` — repo rules for non-interactive commands, project context,
-  code style/errors, and commit messages.
+  code style/errors, commit-message wording/process, and GitHub issue
+  references.
 
 ## 3. Key decisions & reasoning
 
