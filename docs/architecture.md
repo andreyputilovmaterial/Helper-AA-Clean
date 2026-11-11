@@ -9,12 +9,12 @@ Stable technical reference for the Helper-AA-Clean tools.
 
 ## Overview
 
-Two standalone Python scripts (no build step; run directly from `src/`):
+Two standalone Python packages (no build step; run directly from `src/`):
 
-| Script | Purpose | Runtime |
+| Package | Purpose | Runtime |
 | --- | --- | --- |
-| `src/clean_aa_backups.py` | Prune old timestamped backup sheets from AA workbooks | openpyxl (cross-platform) |
-| `src/run_aa_workbook.py` | Run the workbook's own VBA actions (reload / commit-save / validate / auto) | Excel COM via pywin32 (Windows only) |
+| `src/clean_aa_backups/` | Prune old timestamped backup sheets from AA workbooks | openpyxl (cross-platform) |
+| `src/run_aa_workbook/` | Run the workbook's own VBA actions (reload / commit-save / validate / auto) | Excel COM via pywin32 (Windows only) |
 
 ## AA workbook format
 
@@ -28,7 +28,7 @@ that are never touched, and timestamped backup sheets:
   `AnalysisValues`) whose timestamps differ by a few seconds because each sheet
   is stamped as it is written.
 
-## Tool: clean_aa_backups.py
+## Tool: clean_aa_backups
 
 Removes old backup sheets while leaving live sheets untouched. Retention is
 applied per sheet name, so whole backup triplets are kept or removed together:
@@ -42,7 +42,7 @@ The 6-month rule runs first, so a sheet kept by it is never removed even if it
 is not the most recent for its name in its quarter.
 
 ```bash
-python src/clean_aa_backups.py [options] <paths...>
+python src/clean_aa_backups/clean_aa_backups.py [options] <paths...>
 ```
 
 | Option | Description |
@@ -59,7 +59,7 @@ Behavior notes:
 - openpyxl re-saves the whole workbook; unusual elements (some charts/images/form
   controls) may not round-trip — `--dry-run` / `--backup` are the safety net.
 
-## Tool: run_aa_workbook.py
+## Tool: run_aa_workbook
 
 Runs the AA workbook's own VBA buttons — reload, commit/save, and validation —
 through `Excel.Application`, instead of clicking and waiting.  A synthetic
@@ -158,7 +158,7 @@ The `win32com` import is lazy, so `--help` and the test suite run without
 pywin32 (e.g. on macOS).
 
 ```bash
-python src/run_aa_workbook.py --program {reload,commit_save,validate,auto} [options] <path>
+python src/run_aa_workbook/run_aa_workbook.py --program {reload,commit_save,validate,auto} [options] <path>
 ```
 
 | Option | Description |

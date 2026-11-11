@@ -1,6 +1,11 @@
 # Project Context — Helper-AA-Clean
 
 > Last updated: 2026-11-11
+> (2026-11-11) Reorganized `src/` into one package directory per tool:
+> `src/clean_aa_backups/` (openpyxl) and `src/run_aa_workbook/` (pywin32), each
+> with its own module and `__init__.py`. Tests now import via
+> `from clean_aa_backups import clean_aa_backups` /
+> `from run_aa_workbook import run_aa_workbook`.
 > (2026-11-11) Split `requirements.txt` into `requirements-clean-aa.txt`
 > (openpyxl) and `requirements-run-aa.txt` (pywin32) so each tool's dependency
 > can be installed independently.
@@ -61,8 +66,8 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
 - `README.md` — entry-level overview only (links to `docs/architecture.md`).
 - `docs/architecture.md` — stable technical documentation (full docs).
 - `docs/project-context.md` — living working memory (this file; not stable).
-- `src/clean_aa_backups.py` — the whole tool (single file, no build step).
-- `src/run_aa_workbook.py` — Windows-only COM automation of the AA actions
+- `src/clean_aa_backups/` — the clean_aa_backups tool (openpyxl, no build step).
+- `src/run_aa_workbook/` — Windows-only COM automation of the AA actions
   (reload / commit-save / validate) with programmatic message-box handling.
 - `tests/test_clean_aa_backups.py` — pytest suite.
 - `tests/test_run_aa_workbook.py` — pytest suite for step planning, dialog
