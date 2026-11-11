@@ -12,8 +12,8 @@ Small command-line helpers for working with AA (Excel) workbooks.
 # Preview a cleanup before touching anything (recommended first)
 python src/clean_aa_backups.py --dry-run path/to/file.xlsm
 
-# Run the AA workflow (Windows only)
-python src/run_aa_workbook.py path/to/file.xlsm
+# Run one AA action (Windows only): reload, commit_save, validate, or auto
+python src/run_aa_workbook.py --program validate path/to/file.xlsm
 ```
 
 ## Requirements

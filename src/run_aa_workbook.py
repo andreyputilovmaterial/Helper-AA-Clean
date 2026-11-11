@@ -8,7 +8,8 @@ The AA workbook ships three buttons that drive its VBA workflow:
 
 There is also a synthetic ``auto`` action that runs a full cycle of
 commit/save -> reload -> commit/save (2x commit/save with a reload in
-between), expanded from the three leaf steps above.
+between), expanded from the three leaf steps above.  Each run executes
+exactly one of these actions, chosen with ``--program``.
 
 Clicking them by hand and waiting for each message box is slow and
 error-prone.  This script opens the workbook with ``Excel.Application``
@@ -70,7 +71,7 @@ Windows only
 ------------
 This uses COM automation, so it runs on Windows with Excel installed and
 ``pywin32`` available (``pip install pywin32``).  On other platforms the
-import is delayed so ``--help`` and ``--dry-run`` still work.
+import is delayed so ``--help`` and the test suite still work.
 """
 
 import argparse
@@ -108,7 +109,7 @@ ANALYSIS_VALIDATION_SHEET = "AnalysisValidation"
 # How often the background thread scans for modal message boxes.
 DIALOG_POLL_INTERVAL = 0.1
 
-# Step keys (used for --skip / --macro-<step> and per-step dialog wiring).
+# Step keys (used for --program choices and per-step dialog wiring).
 RELOAD = "reload"
 COMMIT_SAVE = "commit_save"
 VALIDATE = "validate"
@@ -266,22 +267,17 @@ STEP_DIALOGS = {
 }
 
 
-def plan_steps(actions=ACTIONS, skip=(), macro_overrides=None):
-    """Return the ordered leaf steps to run.
+def plan_steps(actions):
+    """Return the ordered leaf steps for the given action keys.
 
-    ``actions`` is a sequence of action keys.  The synthetic ``auto`` key is
-    expanded into its full cycle of leaf steps (commit/save -> reload ->
-    commit/save).  ``skip`` drops whole action keys; ``macro_overrides`` maps
-    a leaf step key to a replacement VBA macro name (applied inside ``auto``
-    too).
+    ``actions`` is a sequence of action keys (the CLI passes a single key per
+    run).  The synthetic ``auto`` key is expanded into its full cycle of leaf
+    steps (commit/save -> reload -> commit/save).  Macro names are fixed in
+    ``STEPS``.
     """
-    macro_overrides = macro_overrides or {}
-    skip = set(skip or ())
     by_key = {step.key: step for step in STEPS}
     planned = []
     for key in actions:
-        if key in skip:
-            continue
         if key == AUTO:
             for sub_key, context in AUTO_EXPANSION:
                 sub = by_key[sub_key]
@@ -289,29 +285,21 @@ def plan_steps(actions=ACTIONS, skip=(), macro_overrides=None):
                     Step(
                         sub.key,
                         f"auto: {sub.label}",
-                        macro_overrides.get(sub.key, sub.macro),
+                        sub.macro,
                         context,
                     )
                 )
             continue
         step = by_key[key]
-        planned.append(
-            Step(step.key, step.label, macro_overrides.get(step.key, step.macro))
-        )
+        planned.append(Step(step.key, step.label, step.macro))
     return planned
-
-
-def plan_actions(actions=ACTIONS, skip=()):
-    """Return the top-level action keys to run after applying ``skip``."""
-    skip = set(skip or ())
-    return [key for key in actions if key not in skip]
 
 
 def _import_win32com():
     """Import ``win32com.client`` lazily.
 
-    Kept inside a function so ``--help`` and ``--dry-run`` work on machines
-    without pywin32 (e.g. this repo's macOS dev box, or the test suite).
+    Kept inside a function so ``--help`` works on machines without pywin32
+    (e.g. this repo's macOS dev box, or the test suite).
     """
     try:
         import win32com.client as win32com_client
@@ -679,8 +667,9 @@ class DialogWatcher:
 def run_step(xl, workbook, workbook_name, step, idle_timeout, settle_seconds):
     """Run one step's macro, dismissing and recording its message boxes.
 
-    Returns the step's validation-details text (``""`` if none); raises on
-    failure.
+    On success the workbook is explicitly saved, so its on-disk state is clean
+    and it can be closed without Excel prompting.  Returns the step's
+    validation-details text (``""`` if none); raises on failure.
     """
     dialogs = STEP_DIALOGS.get(step.key, ())
 
@@ -691,18 +680,17 @@ def run_step(xl, workbook, workbook_name, step, idle_timeout, settle_seconds):
     with DialogWatcher(dialogs) as watcher:
         run_macro(xl, workbook_name, step.macro, idle_timeout, settle_seconds)
 
-    return evaluate_step_outcome(step, watcher.records, before_mtime, workbook)
+    details = evaluate_step_outcome(step, watcher.records, before_mtime, workbook)
+    workbook.Save()
+    return details
 
 
 def run_workbook(
     path,
     actions,
-    macro_overrides=None,
     log_path=None,
     aa_file=None,
     visible=False,
-    read_only=False,
-    save=True,
     leave_open=False,
     idle_timeout=IDLE_TIMEOUT_DEFAULT,
     settle_seconds=SETTLE_SECONDS_DEFAULT,
@@ -712,12 +700,13 @@ def run_workbook(
     ``actions`` is a sequence of top-level action keys (``auto`` runs its full
     cycle as one logged action).  Before anything runs, the data-file path is
     read from ``Main``!C13 into the module global ``DATA_FILE_PATH`` (pre-step
-    #0).  Each action's result and any validation details are appended to
-    ``log_path``; a failure is logged and then re-raised so the run still
-    stops with an exception.  Returns the number of leaf steps run.  When
-    ``leave_open`` is true the workbook and Excel instance are left open (for
-    debugging); otherwise they are closed in a ``finally`` block even if an
-    action raises.
+    #0).  After each successful step the workbook is saved explicitly, so it
+    is left in a clean, closable state.  Each action's result and any
+    validation details are appended to ``log_path``; a failure is logged and
+    then re-raised so the run still stops with an exception.  Returns the
+    number of leaf steps run.  When ``leave_open`` is true the workbook and
+    Excel instance are left open (for debugging); otherwise they are closed in
+    a ``finally`` block even if an action raises.
     """
     global DATA_FILE_PATH
 
@@ -732,7 +721,6 @@ def run_workbook(
         abs_path = str(Path(path).resolve())
         workbook = xl.Workbooks.Open(
             Filename=abs_path,
-            ReadOnly=read_only,
             UpdateLinks=UPDATE_LINKS,
         )
         workbook.Activate()
@@ -750,7 +738,7 @@ def run_workbook(
             started = datetime.now()
             try:
                 validation_details = ""
-                for step in plan_steps([action_key], macro_overrides=macro_overrides):
+                for step in plan_steps([action_key]):
                     print(f"Step {step.label}:")
                     step_details = run_step(
                         xl, workbook, workbook_name, step, idle_timeout, settle_seconds
@@ -795,10 +783,6 @@ def run_workbook(
                     now=started,
                 )
 
-        if save and not read_only:
-            print("saving workbook")
-            workbook.Save()
-
         return ran
     finally:
         if workbook is not None and not leave_open:
@@ -823,46 +807,21 @@ def build_parser():
     )
     parser.add_argument("path", help="Excel file (.xlsx / .xlsm) to open and run")
     parser.add_argument(
+        "--program",
+        required=True,
+        choices=list(ACTIONS),
+        help="which program to run (exactly one per run); choices: %(choices)s",
+    )
+    parser.add_argument(
         "--visible",
         action="store_true",
         help="show the Excel window (default: run hidden)",
-    )
-    parser.add_argument(
-        "--read-only",
-        action="store_true",
-        help="open the workbook read-only and never save",
-    )
-    parser.add_argument(
-        "--no-save",
-        action="store_true",
-        help="do not save the workbook after the run",
     )
     parser.add_argument(
         "--leave-open",
         action="store_true",
         help="keep Excel and the workbook open after the run (for debugging)",
     )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="print the planned steps without launching Excel",
-    )
-    parser.add_argument(
-        "--skip",
-        action="append",
-        choices=list(ACTIONS),
-        help="skip a step (repeatable); choices: %(choices)s",
-    )
-    for step in STEPS:
-        parser.add_argument(
-            f"--macro-{step.key.replace('_', '-')}",
-            default=None,
-            metavar="NAME",
-            help=(
-                f"override the VBA macro name for '{step.label}' "
-                f"(default: {step.macro!r})"
-            ),
-        )
     parser.add_argument(
         "--idle-timeout",
         type=float,
@@ -902,25 +861,12 @@ def main(argv=None):
         )
         return 1
 
-    macro_overrides = {}
-    for step in STEPS:
-        value = getattr(args, f"macro_{step.key}")
-        if value:
-            macro_overrides[step.key] = value
+    actions = [args.program]
 
-    actions = plan_actions(ACTIONS, skip=args.skip)
-    if not actions:
-        print("no actions to run (all skipped)")
-        return 0
-
-    steps = plan_steps(actions, macro_overrides=macro_overrides)
+    steps = plan_steps(actions)
     print(f"{parser.prog}: {path}")
     for step in steps:
-        print(f"  - {step.label} ({step.macro})")
-
-    if args.dry_run:
-        print("dry run: nothing executed")
-        return 0
+        print(f"  - {step.label}")
 
     try:
         working_path = make_working_copy(path)
@@ -932,12 +878,9 @@ def main(argv=None):
         ran = run_workbook(
             working_path,
             actions,
-            macro_overrides=macro_overrides,
             log_path=log_path,
             aa_file=path,
             visible=args.visible,
-            read_only=args.read_only,
-            save=not args.no_save,
             leave_open=args.leave_open,
             idle_timeout=args.idle_timeout,
             settle_seconds=args.settle,

@@ -81,8 +81,8 @@ Workflow:
    the right button (OK / Cancel), recording validation-error text.
 6. Wait for Excel to go idle (`Application.Ready` and not `Application.Busy`)
    after each macro, then an optional settle delay.
-7. Save (unless `--read-only` / `--no-save`) and close, or leave open with
-   `--leave-open`.
+7. After each successful step, save the workbook explicitly so its on-disk
+   state is clean, then close — or leave open with `--leave-open`.
 
 `Application.Run` is synchronous; the idle poll is a safety net for macros that
 hand work off asynchronously.
@@ -146,36 +146,32 @@ Before launching Excel, the script copies the input next to itself as
 `<name>-working-automated-YYYY-MM-DD.xlsm` (same extension) and runs only
 against that copy.  The original is never opened or saved, so the macros'
 repeated saves (and any crash mid-run) leave the original untouched.  A
-previous working copy from the same day is overwritten.  `--dry-run` does not
-create the copy because it launches nothing.
+previous working copy from the same day is overwritten.
 
 Requirements (Windows only):
 
 - Excel installed.
 - [pywin32](https://pypi.org/project/pywin32/) — `pip install pywin32`.
 
-The `win32com` import is lazy, so `--help`, `--dry-run`, and the test suite run
-without pywin32 (e.g. on macOS).
+The `win32com` import is lazy, so `--help` and the test suite run without
+pywin32 (e.g. on macOS).
 
 ```bash
-python src/run_aa_workbook.py [options] <path>
+python src/run_aa_workbook.py --program {reload,commit_save,validate,auto} [options] <path>
 ```
 
 | Option | Description |
 | --- | --- |
 | `path` | Excel file (`.xlsx` / `.xlsm`) to open and run |
+| `--program KEY` | which program to run; exactly one per run (required) |
 | `--visible` | show the Excel window (default hidden) |
-| `--read-only` | open read-only and never save |
-| `--no-save` | do not save after the run |
 | `--leave-open` | keep Excel/workbook open (debugging) |
-| `--dry-run` | print the plan without launching Excel |
-| `--skip STEP` | skip a step; repeatable |
-| `--macro-<step> NAME` | override a step's VBA macro name |
 | `--idle-timeout S` | seconds to wait for Excel to go idle (default 300) |
 | `--settle S` | extra seconds after idle (default 1.0) |
 
-Step keys: `reload`, `commit_save`, `validate`, `auto` (`auto` expands to
-`commit_save` -> `reload` -> `commit_save`).
+Program keys: `reload`, `commit_save`, `validate`, `auto` (`auto` expands to
+`commit_save` -> `reload` -> `commit_save`).  Exactly one is selected per
+invocation via `--program`.
 
 ### Macro configuration
 
@@ -189,8 +185,7 @@ The three macros are the real VBA entry points behind the AA buttons, in one
 | `validate` | `Button1_Click` | `Addon` |
 
 `auto` is not a macro; it is a synthetic action expanded into
-`commit_save` -> `reload` -> `commit_save`.  Override a leaf macro name at
-runtime with `--macro-<step>` (the override also applies inside `auto`).
+`commit_save` -> `reload` -> `commit_save`.
 
 ### Limitations
 

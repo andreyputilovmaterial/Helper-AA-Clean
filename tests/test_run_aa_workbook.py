@@ -35,16 +35,9 @@ class FakeExcel:
 
 # --- plan_steps -------------------------------------------------------------
 
-def test_plan_steps_runs_all_actions_by_default():
-    steps = ruw.plan_steps()
-    assert [s.key for s in steps] == [
-        "reload",
-        "commit_save",
-        "validate",
-        "commit_save",
-        "reload",
-        "commit_save",
-    ]
+def test_plan_steps_requires_explicit_actions():
+    with pytest.raises(TypeError):
+        ruw.plan_steps()
 
 
 def test_plan_steps_auto_expands_to_commit_reload_commit():
@@ -52,43 +45,9 @@ def test_plan_steps_auto_expands_to_commit_reload_commit():
     assert [s.key for s in steps] == ["commit_save", "reload", "commit_save"]
 
 
-def test_plan_steps_skips_an_action_but_keeps_auto_cycle_intact():
-    steps = ruw.plan_steps(skip=["commit_save"])
-    assert [s.key for s in steps] == [
-        "reload",
-        "validate",
-        "commit_save",
-        "reload",
-        "commit_save",
-    ]
-
-
-def test_plan_steps_skips_the_auto_action():
-    steps = ruw.plan_steps(skip=["auto"])
-    assert [s.key for s in steps] == ["reload", "commit_save", "validate"]
-
-
-def test_plan_steps_auto_only_when_leaf_actions_are_skipped():
-    steps = ruw.plan_steps(skip=["reload", "commit_save", "validate"])
-    assert [s.key for s in steps] == ["commit_save", "reload", "commit_save"]
-
-
-def test_plan_steps_overrides_macro_name():
-    steps = ruw.plan_steps(
-        actions=[ruw.RELOAD, ruw.COMMIT_SAVE, ruw.VALIDATE],
-        macro_overrides={"validate": "ValidateNow"},
-    )
-    by_key = {s.key: s for s in steps}
-    assert by_key["validate"].macro == "ValidateNow"
-    assert by_key["reload"].macro == "ListAll"
-    assert by_key["commit_save"].macro == "SaveAll"
-
-
-def test_plan_steps_macro_override_applies_inside_auto():
-    steps = ruw.plan_steps(
-        actions=[ruw.AUTO], macro_overrides={"commit_save": "SaveAllNow"}
-    )
-    assert [s.macro for s in steps] == ["SaveAllNow", "ListAll", "SaveAllNow"]
+def test_plan_steps_uses_fixed_macros():
+    steps = ruw.plan_steps([ruw.RELOAD, ruw.COMMIT_SAVE, ruw.VALIDATE])
+    assert [s.macro for s in steps] == ["ListAll", "SaveAll", "Button1_Click"]
 
 
 def test_plan_steps_auto_tags_second_commit_as_expected():
@@ -103,18 +62,6 @@ def test_plan_steps_auto_labels_are_prefixed():
         "auto: reload specifications",
         "auto: commit/save specifications",
     ]
-
-
-def test_plan_steps_all_skipped_is_empty():
-    assert ruw.plan_steps(skip=list(ruw.ACTIONS)) == []
-
-
-def test_plan_actions_returns_all_by_default():
-    assert ruw.plan_actions() == ["reload", "commit_save", "validate", "auto"]
-
-
-def test_plan_actions_skips():
-    assert ruw.plan_actions(skip=["auto", "reload"]) == ["commit_save", "validate"]
 
 
 def test_program_names_mapping():
@@ -526,22 +473,24 @@ def test_evaluate_auto_second_commit_without_expected_message_raises():
 
 # --- argument parsing -------------------------------------------------------
 
-def test_parser_skip_and_macro_override():
+def test_parser_program_and_visible():
     args = ruw.build_parser().parse_args(
-        [
-            "some.xlsm",
-            "--skip",
-            "commit_save",
-            "--macro-validate",
-            "ValidateNow",
-        ]
+        ["some.xlsm", "--program", "validate", "--visible"]
     )
-    assert args.skip == ["commit_save"]
-    assert args.macro_validate == "ValidateNow"
-    assert args.macro_reload is None
-    assert args.macro_commit_save is None
+    assert args.program == "validate"
+    assert args.visible is True
 
 
-def test_parser_accepts_auto_skip():
-    args = ruw.build_parser().parse_args(["some.xlsm", "--skip", "auto"])
-    assert args.skip == ["auto"]
+def test_parser_accepts_auto_program():
+    args = ruw.build_parser().parse_args(["some.xlsm", "--program", "auto"])
+    assert args.program == "auto"
+
+
+def test_parser_requires_program():
+    with pytest.raises(SystemExit):
+        ruw.build_parser().parse_args(["some.xlsm"])
+
+
+def test_parser_rejects_unknown_program():
+    with pytest.raises(SystemExit):
+        ruw.build_parser().parse_args(["some.xlsm", "--program", "nope"])

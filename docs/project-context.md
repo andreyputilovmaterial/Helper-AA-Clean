@@ -1,6 +1,17 @@
 # Project Context — Helper-AA-Clean
 
 > Last updated: 2026-11-11
+> (2026-11-11) Slimmed `run_aa_workbook.py`'s CLI: removed `--read-only`,
+> `--no-save`, `--dry-run`, and the `--macro-<step>` overrides. Macro names are
+> hardcoded in `STEPS`. The workbook is now saved explicitly after every
+> successful step (commit/save, reload, validate, and each step inside `auto`)
+> instead of a single end-of-run save, so the working copy is always left in a
+> clean, closable state.
+> (2026-11-11) `run_aa_workbook.py` now runs exactly one program per
+> invocation: a required `--program {reload,commit_save,validate,auto}` option
+> replaced the old run-all-by-default + `--skip` model. `plan_actions()` was
+> removed and `plan_steps(actions, macro_overrides=None)` no longer takes a
+> `skip` argument or a default-all actions value.
 > (2026-11-06) Initial version. Created `src/clean_aa_backups.py` and its pytest
 > suite. Retention: keep everything from the last 6 months, then the single most
 > recent backup per sheet name per calendar quarter. Grouping is per sheet name
@@ -77,17 +88,26 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
   file with `Excel.Application` (`win32com.client.DispatchEx`) and calls
   `Application.Run("'file.xlsm'!Macro")`, so it exercises exactly what the
   buttons do rather than reimplementing the logic.
-- **`win32com` import is lazy.** It is imported inside a function, so `--help`,
-  `--dry-run`, and the pytest suite run on non-Windows machines without pywin32.
+- **`win32com` import is lazy.** It is imported inside a function, so `--help`
+  and the pytest suite run on non-Windows machines without pywin32.
 - **The three actions map to the real VBA procedures.** `reload` → `ListAll`
   (Simplified), `commit_save` → `SaveAll` (Simplified), `validate` →
-  `Button1_Click` (Addon), still in one `STEPS` table (plus `--macro-...`
-  overrides).
+  `Button1_Click` (Addon), fixed in one `STEPS` table (no CLI override).
 - **`auto` is a synthetic action.** It expands to commit/save -> reload ->
   commit/save (a full cycle of 2x commit/save with a reload in between) in
   `plan_steps()`, so the existing per-step dialog/outcome handling applies.
   Its second commit/save is expected to fail validation, and that `Validation
   Error` is treated as the success signal (any other error fails).
+- **Explicit save after each successful step.** After a step's macro returns
+  and its outcome is evaluated as passing, the workbook is saved
+  (`workbook.Save()`) so its on-disk state is clean and it can be closed
+  without Excel prompting. There is no `--read-only`, `--no-save`, or
+  `--dry-run` mode: the macros save internally anyway, and dry-running is not
+  meaningful for COM/VBA side effects.
+- **One program per run.** The CLI requires `--program
+  {reload,commit_save,validate,auto}`; there is no default "run everything"
+  mode and no `--skip` flag. `main()` passes `[args.program]` straight into
+  `plan_steps()`.
 - **Message boxes are dismissed from a background thread.** `Application.Run`
   blocks on modal `MsgBox`s, so a `DialogWatcher` thread matches them by
   title/text and sends `WM_COMMAND` (IDOK/IDCANCEL); validation-error text and
