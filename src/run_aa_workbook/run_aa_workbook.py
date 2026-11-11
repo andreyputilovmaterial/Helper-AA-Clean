@@ -6,10 +6,11 @@ The AA workbook ships three buttons that drive its VBA workflow:
 * commit/save (``SaveAll``) — validate, then write specifications back
 * validate (``Button1_Click``) — run the project-team validation
 
-There is also a synthetic ``auto`` action that runs a full cycle of
-commit/save -> reload -> commit/save (2x commit/save with a reload in
-between), expanded from the three leaf steps above.  Each run executes
-exactly one of these actions, chosen with ``--program``.
+There are also two synthetic ``auto`` actions that run the same full cycle
+of commit/save -> reload -> commit/save (2x commit/save with a reload in
+between), expanded from the three leaf steps above: ``auto_apply_aa`` and
+``auto_reload_aa``.  Each run executes exactly one action, chosen with
+``--program``.
 
 Clicking them by hand and waiting for each message box is slow and
 error-prone.  This script opens the workbook with ``Excel.Application``
@@ -42,13 +43,16 @@ click it.
 
 Auto action pass/fail
 ---------------------
-The synthetic ``auto`` action runs commit/save -> reload -> commit/save:
+The synthetic ``auto_apply_aa`` and ``auto_reload_aa`` actions both run
+commit/save -> reload -> commit/save:
 
 * first commit/save — normal rules (validation failure or any other error
   is a failure);
 * reload — any error is a failure;
-* second commit/save — its expected validation failure is the success signal,
-  while any other error is a failure.
+* second commit/save — ``auto_reload_aa`` treats its expected validation
+  failure as the success signal (any other error is a failure), while
+  ``auto_apply_aa`` uses the normal commit/save rules, so a validation
+  failure is a real failure and the run exits non-zero.
 
 Data file (pre-step #0)
 -----------------------
@@ -62,7 +66,8 @@ Logging
 -------
 Every action that actually runs appends one row to a CSV log
 (``aa_run_log.csv``) in the same directory as the AA file.  Columns are
-``datetime``, ``program`` (commit/save, (re)load, run validation, auto),
+``datetime``, ``program`` (commit/save, (re)load, run validation,
+auto_apply_aa, auto_reload_aa),
 ``aa_file``, ``data_file``, ``result`` (``success`` or the exception message),
 and ``validation_details`` (the message box text plus the
 ``AnalysisValidation`` sheet when a validation failed).
@@ -125,7 +130,8 @@ DIALOG_POLL_INTERVAL = 0.1
 RELOAD = "reload"
 COMMIT_SAVE = "commit_save"
 VALIDATE = "validate"
-AUTO = "auto"
+AUTO_APPLY_AA = "auto_apply_aa"
+AUTO_RELOAD_AA = "auto_reload_aa"
 
 #: Path to the external data file the macros read/write.  Read from
 #: ``Main``!C13 before any action runs (pre-step #0) and shared globally so
@@ -172,12 +178,13 @@ EVENT_EXCEPTION = "exception"
 EVENT_SAVE = "explicitly called save on Excel file"
 EVENT_DIALOG_CAPTURED = "captured a dialog box"
 
-# Column 2 values (the four programs/actions the script can run).
+# Column 2 values (the programs/actions the script can run).
 PROGRAM_NAMES = {
     RELOAD: "(re)load",
     COMMIT_SAVE: "commit/save",
     VALIDATE: "run validation",
-    AUTO: "auto",
+    AUTO_APPLY_AA: "auto_apply_aa",
+    AUTO_RELOAD_AA: "auto_reload_aa",
 }
 
 
@@ -206,22 +213,34 @@ STEPS = (
     Step(VALIDATE, "run validation", "Button1_Click"),
 )
 
-# "auto" is a synthetic action: a full cycle of commit/save -> reload ->
-# commit/save (2x commit/save with a reload in between).  plan_steps() expands
-# it into the leaf steps above, tagging each leaf with its role in the cycle.
+# The two synthetic "auto" actions each run the same full cycle of commit/save
+# -> reload -> commit/save (2x commit/save with a reload in between).
+# plan_steps() expands them into the leaf steps above, tagging each leaf with
+# its role in the cycle.  They differ only in how the second commit/save is
+# judged:
 #
-# The second commit/save is expected to fail validation; that validation
-# failure is the "auto" success signal (see evaluate_step_outcome).
+# * auto_reload_aa — the second commit/save is expected to fail validation,
+#   so that ``Validation Error`` is the success signal (the behaviour the
+#   previous ``auto`` action had); see evaluate_step_outcome.
+# * auto_apply_aa — the second commit/save uses the normal commit/save rules,
+#   so a validation failure is a real failure and the run exits non-zero.
 AUTO_COMMIT_SECOND = "auto_commit_second"
 
-AUTO_EXPANSION = (
-    (COMMIT_SAVE, ""),
-    (RELOAD, ""),
-    (COMMIT_SAVE, AUTO_COMMIT_SECOND),
-)
+AUTO_EXPANSIONS = {
+    AUTO_RELOAD_AA: (
+        (COMMIT_SAVE, ""),
+        (RELOAD, ""),
+        (COMMIT_SAVE, AUTO_COMMIT_SECOND),
+    ),
+    AUTO_APPLY_AA: (
+        (COMMIT_SAVE, ""),
+        (RELOAD, ""),
+        (COMMIT_SAVE, ""),
+    ),
+}
 
-# All selectable actions, in run order: the leaf steps, then "auto".
-ACTIONS = tuple(step.key for step in STEPS) + (AUTO,)
+# All selectable actions, in run order: the leaf steps, then the auto cycles.
+ACTIONS = tuple(step.key for step in STEPS) + (AUTO_APPLY_AA, AUTO_RELOAD_AA)
 
 
 @dataclass(frozen=True)
@@ -356,20 +375,20 @@ def plan_steps(actions):
     """Return the ordered leaf steps for the given action keys.
 
     ``actions`` is a sequence of action keys (the CLI passes a single key per
-    run).  The synthetic ``auto`` key is expanded into its full cycle of leaf
-    steps (commit/save -> reload -> commit/save).  Macro names are fixed in
-    ``STEPS``.
+    run).  The synthetic ``auto_apply_aa`` and ``auto_reload_aa`` keys are
+    expanded into their full cycle of leaf steps (commit/save -> reload ->
+    commit/save).  Macro names are fixed in ``STEPS``.
     """
     by_key = {step.key: step for step in STEPS}
     planned = []
     for key in actions:
-        if key == AUTO:
-            for sub_key, context in AUTO_EXPANSION:
+        if key in AUTO_EXPANSIONS:
+            for sub_key, context in AUTO_EXPANSIONS[key]:
                 sub = by_key[sub_key]
                 planned.append(
                     Step(
                         sub.key,
-                        f"auto: {sub.label}",
+                        f"{key}: {sub.label}",
                         sub.macro,
                         context,
                     )
@@ -643,18 +662,18 @@ def evaluate_step_outcome(step, records, before_mtime, workbook):
 
     * commit/save — ``Save Successful``, plus the data file was modified
     * validate   — "Validation Complete! No Errors found!"
-    * auto's second commit/save — its expected ``Validation Error`` (see
-      below)
+    * auto_reload_aa's second commit/save — its expected ``Validation Error``
+      (see below)
 
     A ``Validation Error`` box normally means validation failed; its text and
     the ``AnalysisValidation`` sheet are captured into the raised error.  If
     neither the success nor the failure box was seen, the run fails because
     success could not be confirmed.
 
-    The one exception is the second commit/save of the ``auto`` cycle
-    (``step.context == AUTO_COMMIT_SECOND``): that commit/save is expected to
-    fail validation, so its ``Validation Error`` box is treated as success
-    rather than failure (its details are returned for the log).
+    The one exception is the second commit/save of the ``auto_reload_aa``
+    cycle (``step.context == AUTO_COMMIT_SECOND``): that commit/save is
+    expected to fail validation, so its ``Validation Error`` box is treated
+    as success rather than failure (its details are returned for the log).
     """
     if step.key == RELOAD:
         return ""
@@ -663,16 +682,19 @@ def evaluate_step_outcome(step, records, before_mtime, workbook):
         error_record = _first_record(records, "validation_error")
         if error_record is not None:
             log_event(EVENT_VALIDATION_FAILURE, EVENT_PHASE_FINISHED)
-            print("auto: second commit/save failed validation as expected (success)")
+            print(
+                "auto_reload_aa: second commit/save failed validation as "
+                "expected (success)"
+            )
             return format_validation_details(
                 error_record.captured_text,
                 read_sheet_text(workbook, ANALYSIS_VALIDATION_SHEET),
             )
         if _first_record(records, "save_success") is None:
             raise RuntimeError(
-                "auto: second commit/save completed without an expected "
-                "message ('Save Successful' or the expected 'Validation "
-                "Error')"
+                "auto_reload_aa: second commit/save completed without an "
+                "expected message ('Save Successful' or the expected "
+                "'Validation Error')"
             )
         return ""
 
@@ -969,9 +991,10 @@ def run_workbook(
 ):
     """Open ``path`` and run each action in order, logging one CSV row each.
 
-    ``actions`` is a sequence of top-level action keys (``auto`` runs its full
-    cycle as one logged action).  Before anything runs, the data-file path is
-    read from ``Main``!C13 into the module global ``DATA_FILE_PATH`` (pre-step
+    ``actions`` is a sequence of top-level action keys (``auto_apply_aa`` and
+    ``auto_reload_aa`` run their full cycle as one logged action).  Before
+    anything runs, the data-file path is read from ``Main``!C13 into the
+    module global ``DATA_FILE_PATH`` (pre-step
     #0).  After each successful step the workbook is saved explicitly, so it
     is left in a clean, closable state.  Each action's result and any
     validation details are appended to ``log_path``; a failure is logged and
@@ -1074,7 +1097,7 @@ def build_parser():
         prog="run_aa_workbook.py",
         description=(
             "Run the AA workbook's VBA actions (reload, commit/save, "
-            "validate, auto) via Excel.Application."
+            "validate, auto_apply_aa, auto_reload_aa) via Excel.Application."
         ),
     )
     parser.add_argument("path", help="Excel file (.xlsx / .xlsm) to open and run")

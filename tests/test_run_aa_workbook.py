@@ -40,9 +40,10 @@ def test_plan_steps_requires_explicit_actions():
         ruw.plan_steps()
 
 
-def test_plan_steps_auto_expands_to_commit_reload_commit():
-    steps = ruw.plan_steps(actions=[ruw.AUTO])
-    assert [s.key for s in steps] == ["commit_save", "reload", "commit_save"]
+def test_plan_steps_auto_cycles_expand_to_commit_reload_commit():
+    for key in (ruw.AUTO_APPLY_AA, ruw.AUTO_RELOAD_AA):
+        steps = ruw.plan_steps(actions=[key])
+        assert [s.key for s in steps] == ["commit_save", "reload", "commit_save"]
 
 
 def test_plan_steps_uses_fixed_macros():
@@ -51,16 +52,26 @@ def test_plan_steps_uses_fixed_macros():
 
 
 def test_plan_steps_auto_tags_second_commit_as_expected():
-    steps = ruw.plan_steps(actions=[ruw.AUTO])
-    assert [s.context for s in steps] == ["", "", ruw.AUTO_COMMIT_SECOND]
+    reload_steps = ruw.plan_steps(actions=[ruw.AUTO_RELOAD_AA])
+    assert [s.context for s in reload_steps] == ["", "", ruw.AUTO_COMMIT_SECOND]
+
+    apply_steps = ruw.plan_steps(actions=[ruw.AUTO_APPLY_AA])
+    assert [s.context for s in apply_steps] == ["", "", ""]
 
 
 def test_plan_steps_auto_labels_are_prefixed():
-    steps = ruw.plan_steps(actions=[ruw.AUTO])
+    steps = ruw.plan_steps(actions=[ruw.AUTO_RELOAD_AA])
     assert [s.label for s in steps] == [
-        "auto: commit/save specifications",
-        "auto: reload specifications",
-        "auto: commit/save specifications",
+        "auto_reload_aa: commit/save specifications",
+        "auto_reload_aa: reload specifications",
+        "auto_reload_aa: commit/save specifications",
+    ]
+
+    steps = ruw.plan_steps(actions=[ruw.AUTO_APPLY_AA])
+    assert [s.label for s in steps] == [
+        "auto_apply_aa: commit/save specifications",
+        "auto_apply_aa: reload specifications",
+        "auto_apply_aa: commit/save specifications",
     ]
 
 
@@ -68,7 +79,8 @@ def test_program_names_mapping():
     assert ruw.PROGRAM_NAMES[ruw.COMMIT_SAVE] == "commit/save"
     assert ruw.PROGRAM_NAMES[ruw.RELOAD] == "(re)load"
     assert ruw.PROGRAM_NAMES[ruw.VALIDATE] == "run validation"
-    assert ruw.PROGRAM_NAMES[ruw.AUTO] == "auto"
+    assert ruw.PROGRAM_NAMES[ruw.AUTO_APPLY_AA] == "auto_apply_aa"
+    assert ruw.PROGRAM_NAMES[ruw.AUTO_RELOAD_AA] == "auto_reload_aa"
 
 
 # --- wait_for_excel_idle ----------------------------------------------------
@@ -559,7 +571,7 @@ def test_evaluate_validate_error_raises():
 def auto_second_commit_step():
     return ruw.Step(
         ruw.COMMIT_SAVE,
-        "auto: commit/save specifications",
+        "auto_reload_aa: commit/save specifications",
         "SaveAll",
         ruw.AUTO_COMMIT_SECOND,
     )
@@ -605,6 +617,30 @@ def test_evaluate_auto_second_commit_without_expected_message_raises():
         )
 
 
+def auto_apply_second_commit_step():
+    return ruw.Step(
+        ruw.COMMIT_SAVE,
+        "auto_apply_aa: commit/save specifications",
+        "SaveAll",
+        "",
+    )
+
+
+def test_evaluate_auto_apply_second_commit_validation_failure_is_failure():
+    err = ruw.DialogRecord(
+        dialog=ruw.VALIDATION_ERROR_DIALOG,
+        captured_text="An error occured while processing your specifications.",
+        matched_caption="Validation Error",
+    )
+    with pytest.raises(ruw.ValidationError):
+        ruw.evaluate_step_outcome(
+            auto_apply_second_commit_step(),
+            [err],
+            None,
+            FakeSheetWorkbook(("a", "b")),
+        )
+
+
 # --- argument parsing -------------------------------------------------------
 
 def test_parser_program_and_visible():
@@ -615,9 +651,17 @@ def test_parser_program_and_visible():
     assert args.visible is True
 
 
-def test_parser_accepts_auto_program():
-    args = ruw.build_parser().parse_args(["some.xlsm", "--program", "auto"])
-    assert args.program == "auto"
+def test_parser_accepts_auto_programs():
+    for program in ("auto_apply_aa", "auto_reload_aa"):
+        args = ruw.build_parser().parse_args(
+            ["some.xlsm", "--program", program]
+        )
+        assert args.program == program
+
+
+def test_parser_rejects_legacy_auto_program():
+    with pytest.raises(SystemExit):
+        ruw.build_parser().parse_args(["some.xlsm", "--program", "auto"])
 
 
 def test_parser_requires_program():

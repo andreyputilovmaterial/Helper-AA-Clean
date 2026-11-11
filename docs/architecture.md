@@ -14,7 +14,7 @@ Two standalone Python packages (no build step; run directly from `src/`):
 | Package | Purpose | Runtime |
 | --- | --- | --- |
 | `src/clean_aa_backups/` | Prune old timestamped backup sheets from AA workbooks | openpyxl (cross-platform) |
-| `src/run_aa_workbook/` | Run the workbook's own VBA actions (reload / commit-save / validate / auto) | Excel COM via pywin32 (Windows only) |
+| `src/run_aa_workbook/` | Run the workbook's own VBA actions (reload / commit-save / validate / auto_apply_aa / auto_reload_aa) | Excel COM via pywin32 (Windows only) |
 
 ## AA workbook format
 
@@ -62,8 +62,10 @@ Behavior notes:
 ## Tool: run_aa_workbook
 
 Runs the AA workbook's own VBA buttons — reload, commit/save, and validation —
-through `Excel.Application`, instead of clicking and waiting.  A synthetic
-`auto` action runs a full cycle of commit/save -> reload -> commit/save.
+through `Excel.Application`, instead of clicking and waiting.  Two synthetic
+`auto_apply_aa` / `auto_reload_aa` actions run the same full cycle of
+commit/save -> reload -> commit/save, differing only in how the second
+commit/save's validation failure is judged.
 
 Workflow:
 
@@ -116,13 +118,16 @@ Success/failure is judged from which dialog was seen:
   the full `AnalysisValidation` sheet, printed in red with a non-zero exit
   code.
 
-The `auto` action runs commit/save -> reload -> commit/save with these rules:
+The `auto_apply_aa` and `auto_reload_aa` actions both run commit/save ->
+reload -> commit/save with these rules:
 
 - first commit/save — normal rules (validation failure or any other error is
   a failure);
 - reload — any error is a failure;
-- second commit/save — its expected `Validation Error` is the success signal;
-  any other error is a failure.
+- second commit/save — `auto_reload_aa` treats its expected `Validation Error`
+  as the success signal (any other error is a failure); `auto_apply_aa` uses
+  the normal commit/save rules, so a validation failure is a real failure and
+  the run exits non-zero.
 
 Any other modal prompt (not listed above) still blocks the run, because there
 is nobody to click it.
@@ -136,16 +141,18 @@ not the working copy):
 | Column | Meaning |
 | --- | --- |
 | `datetime` | when the action was invoked |
-| `program` | `commit/save`, `(re)load`, `run validation`, or `auto` |
+| `program` | `commit/save`, `(re)load`, `run validation`, `auto_apply_aa`, or `auto_reload_aa` |
 | `aa_file` | path to the AA Excel file |
 | `data_file` | path to the data file (from `Main`!C13) |
 | `result` | `success` or the exception message |
 | `validation_details` | message box text plus `AnalysisValidation` sheet when a validation failed |
 
-The file is created on first use and appended to afterwards.  For `auto`, the
-`validation_details` column holds the first validation failure in the cycle:
-the first commit/save's failure stops the run, otherwise the second
-commit/save's expected failure, or empty if none failed.
+The file is created on first use and appended to afterwards.  For the auto
+cycles, the `validation_details` column holds the first validation failure in
+the cycle: the first commit/save's failure stops the run; otherwise, for
+`auto_reload_aa` the second commit/save's expected failure is recorded as the
+success signal (empty if none failed), while `auto_apply_aa`'s second
+commit/save uses the normal rules and any validation failure stops the run.
 
 A second, more frequently updated event log (`aa_event_log.csv`) is written
 to the same directory.  Each row has three columns, and the file is created
@@ -185,7 +192,7 @@ The `win32com` import is lazy, so `--help` and the test suite run without
 pywin32 (e.g. on macOS).
 
 ```bash
-python src/run_aa_workbook/run_aa_workbook.py --program {reload,commit_save,validate,auto} [options] <path>
+python src/run_aa_workbook/run_aa_workbook.py --program {reload,commit_save,validate,auto_apply_aa,auto_reload_aa} [options] <path>
 ```
 
 | Option | Description |
@@ -197,9 +204,11 @@ python src/run_aa_workbook/run_aa_workbook.py --program {reload,commit_save,vali
 | `--idle-timeout S` | max seconds to wait for Excel to report idle after a macro; a timeout only warns and continues (default 10) |
 | `--settle S` | extra seconds after idle (default 1.0) |
 
-Program keys: `reload`, `commit_save`, `validate`, `auto` (`auto` expands to
-`commit_save` -> `reload` -> `commit_save`).  Exactly one is selected per
-invocation via `--program`.
+Program keys: `reload`, `commit_save`, `validate`, `auto_apply_aa`,
+`auto_reload_aa`.  Both auto keys expand to `commit_save` -> `reload` ->
+`commit_save`; `auto_reload_aa` treats the second commit/save's validation
+failure as success, while `auto_apply_aa` treats it as a failure.  Exactly one
+is selected per invocation via `--program`.
 
 ### Macro configuration
 
@@ -212,7 +221,7 @@ The three macros are the real VBA entry points behind the AA buttons, in one
 | `commit_save` | `SaveAll` | `Simplified` |
 | `validate` | `Button1_Click` | `Addon` |
 
-`auto` is not a macro; it is a synthetic action expanded into
+The auto keys are not macros; they are synthetic actions expanded into
 `commit_save` -> `reload` -> `commit_save`.
 
 The full VBA source of these three macros is captured in

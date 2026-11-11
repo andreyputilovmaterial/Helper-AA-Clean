@@ -1,6 +1,14 @@
 # Project Context — Helper-AA-Clean
 
 > Last updated: 2026-11-11
+> (2026-11-11) Split the single `auto` program into `auto_apply_aa` and
+> `auto_reload_aa`.  Both run the same commit/save -> reload -> commit/save
+> cycle.  `auto_reload_aa` keeps the old behaviour (the second commit/save's
+> validation failure is the success signal); `auto_apply_aa` leaves the second
+> commit/save unmarked, so it uses the normal commit/save rules and a
+> validation failure raises `ValidationError` and exits non-zero.  `AUTO` is
+> gone; `AUTO_EXPANSION` became `AUTO_EXPANSIONS` (a dict keyed by the two
+> auto action names).
 > (2026-11-11) `wait_for_excel_idle` no longer raises on timeout.
 > `Application.Run` is synchronous, so when the idle poll runs the macro has
 > already returned; after a modal `MsgBox` is dismissed from the watcher thread
@@ -97,7 +105,8 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
 - `docs/project-context.md` — living working memory (this file; not stable).
 - `src/clean_aa_backups/` — the clean_aa_backups tool (openpyxl, no build step).
 - `src/run_aa_workbook/` — Windows-only COM automation of the AA actions
-  (reload / commit-save / validate) with programmatic message-box handling.
+  (reload / commit-save / validate / auto_apply_aa / auto_reload_aa) with
+  programmatic message-box handling.
 - `tests/test_clean_aa_backups.py` — pytest suite.
 - `tests/test_run_aa_workbook.py` — pytest suite for step planning, dialog
   matching, data-file-path reading, and pass/fail outcome logic (no COM
@@ -130,11 +139,14 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
 - **The three actions map to the real VBA procedures.** `reload` → `ListAll`
   (Simplified), `commit_save` → `SaveAll` (Simplified), `validate` →
   `Button1_Click` (Addon), fixed in one `STEPS` table (no CLI override).
-- **`auto` is a synthetic action.** It expands to commit/save -> reload ->
-  commit/save (a full cycle of 2x commit/save with a reload in between) in
-  `plan_steps()`, so the existing per-step dialog/outcome handling applies.
-  Its second commit/save is expected to fail validation, and that `Validation
-  Error` is treated as the success signal (any other error fails).
+- **`auto_apply_aa` / `auto_reload_aa` are synthetic actions.** Each expands
+  to commit/save -> reload -> commit/save (a full cycle of 2x commit/save with
+  a reload in between) in `plan_steps()`, so the existing per-step
+  dialog/outcome handling applies.  `auto_reload_aa` tags its second
+  commit/save with `AUTO_COMMIT_SECOND` so its expected `Validation Error` is
+  the success signal (any other error fails); `auto_apply_aa` leaves it
+  untagged, so the normal commit/save rules apply and a validation failure is
+  a real failure (non-zero exit).
 - **Explicit save after each successful step.** After a step's macro returns
   and its outcome is evaluated as passing, the workbook is saved
   (`workbook.Save()`) so its on-disk state is clean and it can be closed
@@ -142,9 +154,9 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
   `--dry-run` mode: the macros save internally anyway, and dry-running is not
   meaningful for COM/VBA side effects.
 - **One program per run.** The CLI requires `--program
-  {reload,commit_save,validate,auto}`; there is no default "run everything"
-  mode and no `--skip` flag. `main()` passes `[args.program]` straight into
-  `plan_steps()`.
+  {reload,commit_save,validate,auto_apply_aa,auto_reload_aa}`; there is no
+  default "run everything" mode and no `--skip` flag. `main()` passes
+  `[args.program]` straight into `plan_steps()`.
 - **Message boxes are dismissed from a background thread.** `Application.Run`
   blocks on modal `MsgBox`s, so a `DialogWatcher` thread matches them by
   title/text and clicks the actual OK/Cancel button, retrying while the dialog
@@ -159,8 +171,8 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
   "recently edited" check).
 - **CSV log next to the AA file.** Each action appends one row to
   `aa_run_log.csv` (created on first use) with datetime, program, aa_file,
-  data_file, result, and validation_details. `auto` is logged as one row with
-  the first validation failure of its cycle.
+  data_file, result, and validation_details. Each auto program is logged as
+  one row with the first validation failure of its cycle.
 
 ## 4. Findings / gotchas
 
