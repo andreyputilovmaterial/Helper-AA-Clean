@@ -192,6 +192,9 @@ The three macros are the real VBA entry points behind the AA buttons, in one
 `auto` is not a macro; it is a synthetic action expanded into
 `commit_save` -> `reload` -> `commit_save`.
 
+The full VBA source of these three macros is captured in
+`docs/aa-vba-macros.md`.
+
 ### Limitations
 
 - The macros must be `Public` subs.  `ListAll` is called with no arguments, so
