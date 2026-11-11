@@ -109,6 +109,14 @@ Success/failure is judged from which dialog was seen:
   the full `AnalysisValidation` sheet, printed in red with a non-zero exit
   code.
 
+The `auto` action runs commit/save -> reload -> commit/save with these rules:
+
+- first commit/save — normal rules (validation failure or any other error is
+  a failure);
+- reload — any error is a failure;
+- second commit/save — its expected `Validation Error` is the success signal;
+  any other error is a failure.
+
 Any other modal prompt (not listed above) still blocks the run, because there
 is nobody to click it.
 

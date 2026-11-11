@@ -90,6 +90,20 @@ def test_plan_steps_macro_override_applies_inside_auto():
     assert [s.macro for s in steps] == ["SaveAllNow", "ListAll", "SaveAllNow"]
 
 
+def test_plan_steps_auto_tags_second_commit_as_expected():
+    steps = ruw.plan_steps(actions=[ruw.AUTO])
+    assert [s.context for s in steps] == ["", "", ruw.AUTO_COMMIT_SECOND]
+
+
+def test_plan_steps_auto_labels_are_prefixed():
+    steps = ruw.plan_steps(actions=[ruw.AUTO])
+    assert [s.label for s in steps] == [
+        "auto: commit/save specifications",
+        "auto: reload specifications",
+        "auto: commit/save specifications",
+    ]
+
+
 def test_plan_steps_all_skipped_is_empty():
     assert ruw.plan_steps(skip=list(ruw.ACTIONS)) == []
 
@@ -396,6 +410,42 @@ def test_evaluate_validate_error_raises():
     with pytest.raises(ruw.ValidationError):
         ruw.evaluate_step_outcome(
             step(ruw.VALIDATE), [err], None, FakeSheetWorkbook(("a", "b"))
+        )
+
+
+def auto_second_commit_step():
+    return ruw.Step(
+        ruw.COMMIT_SAVE,
+        "auto: commit/save specifications",
+        "SaveAll",
+        ruw.AUTO_COMMIT_SECOND,
+    )
+
+
+def test_evaluate_auto_second_commit_validation_failure_is_success():
+    err = ruw.DialogRecord(
+        dialog=ruw.VALIDATION_ERROR_DIALOG,
+        captured_text="An error occured while processing your specifications.",
+        matched_caption="Validation Error",
+    )
+    ruw.evaluate_step_outcome(
+        auto_second_commit_step(), [err], None, FakeSheetWorkbook(None)
+    )
+
+
+def test_evaluate_auto_second_commit_save_success_is_success():
+    ruw.evaluate_step_outcome(
+        auto_second_commit_step(),
+        [record("save_success", "Your Analysis Specifications have been saved")],
+        None,
+        FakeSheetWorkbook(None),
+    )
+
+
+def test_evaluate_auto_second_commit_without_expected_message_raises():
+    with pytest.raises(RuntimeError):
+        ruw.evaluate_step_outcome(
+            auto_second_commit_step(), [], None, FakeSheetWorkbook(None)
         )
 
 

@@ -30,6 +30,8 @@
 > (2026-11-11) Added a synthetic `auto` action (commit/save -> reload ->
 > commit/save) and renamed the data-file path symbols to clear, non-cryptic
 > naming.
+> (2026-11-11) Clarified the `auto` pass/fail rules: the second commit/save's
+> expected validation failure is the success signal; all other errors fail.
 
 ## 1. Purpose
 
@@ -80,6 +82,8 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
 - **`auto` is a synthetic action.** It expands to commit/save -> reload ->
   commit/save (a full cycle of 2x commit/save with a reload in between) in
   `plan_steps()`, so the existing per-step dialog/outcome handling applies.
+  Its second commit/save is expected to fail validation, and that `Validation
+  Error` is treated as the success signal (any other error fails).
 - **Message boxes are dismissed from a background thread.** `Application.Run`
   blocks on modal `MsgBox`s, so a `DialogWatcher` thread matches them by
   title/text and sends `WM_COMMAND` (IDOK/IDCANCEL); validation-error text and

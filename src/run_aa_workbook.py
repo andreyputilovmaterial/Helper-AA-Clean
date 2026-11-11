@@ -39,6 +39,16 @@ text of the ones that matter (validation errors) so the script can report it:
 Any other modal prompt will still block the run, because there is nobody to
 click it.
 
+Auto action pass/fail
+---------------------
+The synthetic ``auto`` action runs commit/save -> reload -> commit/save:
+
+* first commit/save — normal rules (validation failure or any other error
+  is a failure);
+* reload — any error is a failure;
+* second commit/save — its expected validation failure is the success signal,
+  while any other error is a failure.
+
 Data file (pre-step #0)
 -----------------------
 The path to the external data file is read from cell ``C13`` on the
@@ -102,11 +112,17 @@ DATA_FILE_PATH = None
 
 @dataclass(frozen=True)
 class Step:
-    """One VBA step of the AA run."""
+    """One VBA step of the AA run.
+
+    ``context`` marks a step as part of a composite action (used by
+    ``evaluate_step_outcome`` for special pass/fail rules); it is ``""`` for
+    ordinary steps.
+    """
 
     key: str
     label: str
     macro: str
+    context: str = ""
 
 
 # The macro names are the VBA entry points behind the AA buttons:
@@ -121,8 +137,17 @@ STEPS = (
 
 # "auto" is a synthetic action: a full cycle of commit/save -> reload ->
 # commit/save (2x commit/save with a reload in between).  plan_steps() expands
-# it into the leaf steps above.
-AUTO_EXPANSION = (COMMIT_SAVE, RELOAD, COMMIT_SAVE)
+# it into the leaf steps above, tagging each leaf with its role in the cycle.
+#
+# The second commit/save is expected to fail validation; that validation
+# failure is the "auto" success signal (see evaluate_step_outcome).
+AUTO_COMMIT_SECOND = "auto_commit_second"
+
+AUTO_EXPANSION = (
+    (COMMIT_SAVE, ""),
+    (RELOAD, ""),
+    (COMMIT_SAVE, AUTO_COMMIT_SECOND),
+)
 
 # All selectable actions, in run order: the leaf steps, then "auto".
 ACTIONS = tuple(step.key for step in STEPS) + (AUTO,)
@@ -229,10 +254,15 @@ def plan_steps(actions=ACTIONS, skip=(), macro_overrides=None):
         if key in skip:
             continue
         if key == AUTO:
-            for sub_key in AUTO_EXPANSION:
+            for sub_key, context in AUTO_EXPANSION:
                 sub = by_key[sub_key]
                 planned.append(
-                    Step(sub.key, sub.label, macro_overrides.get(sub.key, sub.macro))
+                    Step(
+                        sub.key,
+                        f"auto: {sub.label}",
+                        macro_overrides.get(sub.key, sub.macro),
+                        context,
+                    )
                 )
             continue
         step = by_key[key]
@@ -423,13 +453,32 @@ def evaluate_step_outcome(step, records, before_mtime, workbook):
 
     * commit/save — ``Save Successful``, plus the data file was modified
     * validate   — "Validation Complete! No Errors found!"
+    * auto's second commit/save — its expected ``Validation Error`` (see
+      below)
 
-    A ``Validation Error`` box means validation failed; its text and the
-    ``AnalysisValidation`` sheet are captured into the raised error.  If
+    A ``Validation Error`` box normally means validation failed; its text and
+    the ``AnalysisValidation`` sheet are captured into the raised error.  If
     neither the success nor the failure box was seen, the run fails because
     success could not be confirmed.
+
+    The one exception is the second commit/save of the ``auto`` cycle
+    (``step.context == AUTO_COMMIT_SECOND``): that commit/save is expected to
+    fail validation, so its ``Validation Error`` box is treated as success
+    rather than failure.
     """
     if step.key == RELOAD:
+        return
+
+    if step.context == AUTO_COMMIT_SECOND:
+        if _first_record(records, "validation_error") is not None:
+            print("auto: second commit/save failed validation as expected (success)")
+            return
+        if _first_record(records, "save_success") is None:
+            raise RuntimeError(
+                "auto: second commit/save completed without an expected "
+                "message ('Save Successful' or the expected 'Validation "
+                "Error')"
+            )
         return
 
     error_record = _first_record(records, "validation_error")
