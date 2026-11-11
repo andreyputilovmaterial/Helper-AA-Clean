@@ -1,3 +1,4 @@
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -33,30 +34,64 @@ class FakeExcel:
 
 # --- plan_steps -------------------------------------------------------------
 
-def test_plan_steps_runs_all_by_default():
-    steps = ruw.plan_steps(ruw.STEPS)
+def test_plan_steps_runs_all_actions_by_default():
+    steps = ruw.plan_steps()
     assert [s.key for s in steps] == [
-        "apply_definitions",
-        "load_definitions",
-        "run_validation",
+        "reload",
+        "commit_save",
+        "validate",
+        "commit_save",
+        "reload",
+        "commit_save",
     ]
 
 
-def test_plan_steps_skips_a_step():
-    steps = ruw.plan_steps(ruw.STEPS, skip=["load_definitions"])
-    assert [s.key for s in steps] == ["apply_definitions", "run_validation"]
+def test_plan_steps_auto_expands_to_commit_reload_commit():
+    steps = ruw.plan_steps(actions=[ruw.AUTO])
+    assert [s.key for s in steps] == ["commit_save", "reload", "commit_save"]
+
+
+def test_plan_steps_skips_an_action_but_keeps_auto_cycle_intact():
+    steps = ruw.plan_steps(skip=["commit_save"])
+    assert [s.key for s in steps] == [
+        "reload",
+        "validate",
+        "commit_save",
+        "reload",
+        "commit_save",
+    ]
+
+
+def test_plan_steps_skips_the_auto_action():
+    steps = ruw.plan_steps(skip=["auto"])
+    assert [s.key for s in steps] == ["reload", "commit_save", "validate"]
+
+
+def test_plan_steps_auto_only_when_leaf_actions_are_skipped():
+    steps = ruw.plan_steps(skip=["reload", "commit_save", "validate"])
+    assert [s.key for s in steps] == ["commit_save", "reload", "commit_save"]
 
 
 def test_plan_steps_overrides_macro_name():
-    steps = ruw.plan_steps(ruw.STEPS, macro_overrides={"run_validation": "ValidateNow"})
+    steps = ruw.plan_steps(
+        actions=[ruw.RELOAD, ruw.COMMIT_SAVE, ruw.VALIDATE],
+        macro_overrides={"validate": "ValidateNow"},
+    )
     by_key = {s.key: s for s in steps}
-    assert by_key["run_validation"].macro == "ValidateNow"
-    assert by_key["apply_definitions"].macro == "ApplyDefinitions"
+    assert by_key["validate"].macro == "ValidateNow"
+    assert by_key["reload"].macro == "ListAll"
+    assert by_key["commit_save"].macro == "SaveAll"
+
+
+def test_plan_steps_macro_override_applies_inside_auto():
+    steps = ruw.plan_steps(
+        actions=[ruw.AUTO], macro_overrides={"commit_save": "SaveAllNow"}
+    )
+    assert [s.macro for s in steps] == ["SaveAllNow", "ListAll", "SaveAllNow"]
 
 
 def test_plan_steps_all_skipped_is_empty():
-    keys = [s.key for s in ruw.STEPS]
-    assert ruw.plan_steps(ruw.STEPS, skip=keys) == []
+    assert ruw.plan_steps(skip=list(ruw.ACTIONS)) == []
 
 
 # --- wait_for_excel_idle ----------------------------------------------------
@@ -76,8 +111,8 @@ def test_wait_for_excel_idle_times_out():
 
 def test_run_macro_runs_qualified_name():
     xl = FakeExcel(ready=True, busy=False)
-    ruw.run_macro(xl, "aaa.xlsm", "ApplyDefinitions", timeout=1, settle_seconds=0)
-    assert xl.calls == ["'aaa.xlsm'!ApplyDefinitions"]
+    ruw.run_macro(xl, "aaa.xlsm", "ListAll", timeout=1, settle_seconds=0)
+    assert xl.calls == ["'aaa.xlsm'!ListAll"]
 
 
 # --- working copy ------------------------------------------------------------
@@ -123,6 +158,247 @@ def test_make_working_copy_overwrites_existing_copy(tmp_path):
     assert dest.read_bytes() == b"v2"
 
 
+# --- find_dialog ------------------------------------------------------------
+
+def dialog(title="", text="", action="ok"):
+    return ruw.Dialog(key="d", title=title, text=text, action=action)
+
+
+def test_find_dialog_matches_title_and_text():
+    found = ruw.find_dialog(
+        "Validation Error",
+        "An error occured while processing your specs.",
+        [dialog(title="Validation Error", text="error occured")],
+    )
+    assert found is not None
+
+
+def test_find_dialog_is_case_insensitive():
+    found = ruw.find_dialog(
+        "validation error",
+        "AN ERROR OCCURED",
+        [dialog(title="Validation Error", text="error occured")],
+    )
+    assert found is not None
+
+
+def test_find_dialog_empty_title_matches_any_caption():
+    found = ruw.find_dialog(
+        "Some Caption",
+        "Validation Complete! No Errors found!",
+        [dialog(title="", text="Validation Complete!")],
+    )
+    assert found is not None
+
+
+def test_find_dialog_returns_none_when_no_match():
+    assert ruw.find_dialog("Other", "Other text", [dialog(title="Overwrite?")]) is None
+
+
+# --- read_data_file_path ------------------------------------------------------
+
+class FakeCell:
+    def __init__(self, value):
+        self.Value = value
+
+
+class FakeMainSheet:
+    def __init__(self, value):
+        self.value = value
+
+    def Range(self, _cell):
+        return FakeCell(self.value)
+
+
+class FakeMainWorkbook:
+    def __init__(self, value):
+        self.value = value
+
+    def Sheets(self, _name):
+        return FakeMainSheet(self.value)
+
+
+def test_read_data_file_path_returns_existing_file(tmp_path):
+    target = tmp_path / "data.xlsm"
+    target.write_bytes(b"x")
+    result = ruw.read_data_file_path(FakeMainWorkbook(str(target)))
+    assert isinstance(result, Path)
+    assert result == target
+
+
+def test_read_data_file_path_strips_quotes_and_whitespace(tmp_path):
+    target = tmp_path / "data.xlsm"
+    target.write_bytes(b"x")
+    result = ruw.read_data_file_path(FakeMainWorkbook(f'  "{target}"  '))
+    assert result == target
+
+
+def test_read_data_file_path_missing_file_raises():
+    with pytest.raises(FileNotFoundError):
+        ruw.read_data_file_path(FakeMainWorkbook("Z:/no/such/file.xlsm"))
+
+
+def test_read_data_file_path_empty_cell_raises():
+    with pytest.raises(RuntimeError):
+        ruw.read_data_file_path(FakeMainWorkbook("   "))
+
+
+# --- read_sheet_text ---------------------------------------------------------
+
+class FakeUsedRange:
+    def __init__(self, value):
+        self.Value = value
+
+
+class FakeSheet:
+    def __init__(self, value):
+        self.UsedRange = FakeUsedRange(value)
+
+
+class FakeSheetWorkbook:
+    def __init__(self, value):
+        self.value = value
+
+    def Sheets(self, _name):
+        return FakeSheet(self.value)
+
+
+def test_read_sheet_text_empty():
+    assert ruw.read_sheet_text(FakeSheetWorkbook(None), "AnalysisValidation") == ""
+
+
+def test_read_sheet_text_single_value():
+    assert ruw.read_sheet_text(FakeSheetWorkbook("oops"), "x") == "oops"
+
+
+def test_read_sheet_text_rows_and_none_cells():
+    value = (("a", None, "c"), ("d", "e"))
+    assert ruw.read_sheet_text(FakeSheetWorkbook(value), "x") == "a\t\tc\nd\te"
+
+
+# --- verify_data_file_recently_edited ----------------------------------------
+
+def test_verify_data_file_recently_edited_passes_after_edit(tmp_path):
+    target = tmp_path / "data.xlsm"
+    target.write_bytes(b"x")
+    before = ruw.data_file_mtime(target)
+    os.utime(target, (before, before + 10))
+    ruw.verify_data_file_recently_edited(target, before)
+
+
+def test_verify_data_file_recently_edited_raises_when_unchanged(tmp_path):
+    target = tmp_path / "data.xlsm"
+    target.write_bytes(b"x")
+    before = ruw.data_file_mtime(target)
+    with pytest.raises(RuntimeError):
+        ruw.verify_data_file_recently_edited(target, before)
+
+
+# --- evaluate_step_outcome ---------------------------------------------------
+
+def step(key):
+    return ruw.Step(key, key, key)
+
+
+def record(key, text=""):
+    dlg = ruw.Dialog(key=key, title="", text="", action="ok")
+    return ruw.DialogRecord(dialog=dlg, captured_text=text, matched_caption="")
+
+
+def test_evaluate_reload_does_nothing():
+    ruw.evaluate_step_outcome(step(ruw.RELOAD), [], None, FakeSheetWorkbook(None))
+
+
+def test_evaluate_commit_save_success_with_edited_data_file(tmp_path):
+    target = tmp_path / "data.xlsm"
+    target.write_bytes(b"x")
+    before = ruw.data_file_mtime(target)
+    os.utime(target, (before, before + 10))
+    ruw.DATA_FILE_PATH = target
+    try:
+        ruw.evaluate_step_outcome(
+            step(ruw.COMMIT_SAVE),
+            [record("save_success", "Your Analysis Specifications have been saved")],
+            before,
+            FakeSheetWorkbook(None),
+        )
+    finally:
+        ruw.DATA_FILE_PATH = None
+
+
+def test_evaluate_commit_save_success_but_data_file_not_edited_raises(tmp_path):
+    target = tmp_path / "data.xlsm"
+    target.write_bytes(b"x")
+    before = ruw.data_file_mtime(target)
+    ruw.DATA_FILE_PATH = target
+    try:
+        with pytest.raises(RuntimeError):
+            ruw.evaluate_step_outcome(
+                step(ruw.COMMIT_SAVE),
+                [record("save_success")],
+                before,
+                FakeSheetWorkbook(None),
+            )
+    finally:
+        ruw.DATA_FILE_PATH = None
+
+
+def test_evaluate_commit_save_without_success_raises():
+    with pytest.raises(RuntimeError):
+        ruw.evaluate_step_outcome(
+            step(ruw.COMMIT_SAVE), [], None, FakeSheetWorkbook(None)
+        )
+
+
+def test_evaluate_commit_save_validation_error_captures_dialog_and_sheet():
+    err = ruw.DialogRecord(
+        dialog=ruw.VALIDATION_ERROR_DIALOG,
+        captured_text=(
+            "An error occured while processing your specifications.\n\n"
+            "Message: bad"
+        ),
+        matched_caption="Validation Error",
+    )
+    with pytest.raises(ruw.ValidationError) as excinfo:
+        ruw.evaluate_step_outcome(
+            step(ruw.COMMIT_SAVE),
+            [err],
+            None,
+            FakeSheetWorkbook(("row1col1", "row1col2")),
+        )
+    message = str(excinfo.value)
+    assert "Message: bad" in message
+    assert "row1col1" in message
+
+
+def test_evaluate_validate_success_passes():
+    ruw.evaluate_step_outcome(
+        step(ruw.VALIDATE),
+        [record("validation_success", "Validation Complete! No Errors found!")],
+        None,
+        FakeSheetWorkbook(None),
+    )
+
+
+def test_evaluate_validate_without_success_raises():
+    with pytest.raises(RuntimeError):
+        ruw.evaluate_step_outcome(
+            step(ruw.VALIDATE), [], None, FakeSheetWorkbook(None)
+        )
+
+
+def test_evaluate_validate_error_raises():
+    err = ruw.DialogRecord(
+        dialog=ruw.VALIDATION_ERROR_DIALOG,
+        captured_text="An error occured while processing your specifications.",
+        matched_caption="Validation Error",
+    )
+    with pytest.raises(ruw.ValidationError):
+        ruw.evaluate_step_outcome(
+            step(ruw.VALIDATE), [err], None, FakeSheetWorkbook(("a", "b"))
+        )
+
+
 # --- argument parsing -------------------------------------------------------
 
 def test_parser_skip_and_macro_override():
@@ -130,11 +406,17 @@ def test_parser_skip_and_macro_override():
         [
             "some.xlsm",
             "--skip",
-            "load_definitions",
-            "--macro-run-validation",
+            "commit_save",
+            "--macro-validate",
             "ValidateNow",
         ]
     )
-    assert args.skip == ["load_definitions"]
-    assert args.macro_run_validation == "ValidateNow"
-    assert args.macro_apply_definitions is None
+    assert args.skip == ["commit_save"]
+    assert args.macro_validate == "ValidateNow"
+    assert args.macro_reload is None
+    assert args.macro_commit_save is None
+
+
+def test_parser_accepts_auto_skip():
+    args = ruw.build_parser().parse_args(["some.xlsm", "--skip", "auto"])
+    assert args.skip == ["auto"]

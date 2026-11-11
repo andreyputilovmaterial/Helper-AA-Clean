@@ -3,8 +3,8 @@
 Small command-line helpers for working with AA (Excel) workbooks.
 
 - `clean_aa_backups.py` — removes old timestamped backup sheets.
-- `run_aa_workbook.py` — runs the workbook's own VBA steps automatically
-  (apply definitions, load definitions, validation) on Windows + Excel.
+- `run_aa_workbook.py` — runs the workbook's own VBA actions automatically
+  (reload, commit/save, validate, auto) on Windows + Excel.
 
 ## Quick start
 

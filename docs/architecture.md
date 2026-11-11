@@ -14,7 +14,7 @@ Two standalone Python scripts (no build step; run directly from `src/`):
 | Script | Purpose | Runtime |
 | --- | --- | --- |
 | `src/clean_aa_backups.py` | Prune old timestamped backup sheets from AA workbooks | openpyxl (cross-platform) |
-| `src/run_aa_workbook.py` | Run the workbook's own VBA workflow steps | Excel COM via pywin32 (Windows only) |
+| `src/run_aa_workbook.py` | Run the workbook's own VBA actions (reload / commit-save / validate / auto) | Excel COM via pywin32 (Windows only) |
 
 ## AA workbook format
 
@@ -61,8 +61,9 @@ Behavior notes:
 
 ## Tool: run_aa_workbook.py
 
-Runs the AA workbook's own VBA buttons — apply definitions, load definitions,
-and validation — through `Excel.Application`, instead of clicking and waiting.
+Runs the AA workbook's own VBA buttons — reload, commit/save, and validation —
+through `Excel.Application`, instead of clicking and waiting.  A synthetic
+`auto` action runs a full cycle of commit/save -> reload -> commit/save.
 
 Workflow:
 
@@ -72,14 +73,44 @@ Workflow:
 2. Create Excel via `win32com.client.DispatchEx("Excel.Application")` (hidden
    unless `--visible`).
 3. Open the workbook (`DisplayAlerts` off, link updates off).
-4. Run each step's macro via `Application.Run("'file.xlsm'!Macro")`, in order.
-5. Wait for Excel to go idle (`Application.Ready` and not `Application.Busy`)
+4. Pre-step #0: read the external data-file path from cell `C13` on the
+   `Main` sheet into the module global `DATA_FILE_PATH` and verify the file
+   physically exists (fail fast if missing).
+5. Run each step's macro via `Application.Run("'file.xlsm'!Macro")`, in order,
+   while a background thread watches for the step's message boxes and clicks
+   the right button (OK / Cancel), recording validation-error text.
+6. Wait for Excel to go idle (`Application.Ready` and not `Application.Busy`)
    after each macro, then an optional settle delay.
-6. Save (unless `--read-only` / `--no-save`) and close, or leave open with
+7. Save (unless `--read-only` / `--no-save`) and close, or leave open with
    `--leave-open`.
 
 `Application.Run` is synchronous; the idle poll is a safety net for macros that
 hand work off asynchronously.
+
+### Message boxes and pass/fail detection
+
+The macros show modal `MsgBox` prompts.  A `DialogWatcher` thread matches them
+by window title/text and sends `WM_COMMAND` (IDOK / IDCANCEL) to dismiss them,
+recording the text of the dialogs that matter:
+
+| Action | Success dialog | Failure dialog |
+| --- | --- | --- |
+| reload | (none) | (none) |
+| commit/save | `Save Successful` / "Your Analysis Specifications have been saved" | `Validation Error` / "An error occured while processing your specifications." |
+| validate | "Validation Complete! No Errors found!" | `Validation Error` / "An error occured while processing your specifications." |
+
+Success/failure is judged from which dialog was seen:
+
+- commit/save succeeds only when the success dialog was shown **and** the data
+  file's modification time advanced during the save (i.e. it was recently
+  edited).  Otherwise the run fails.
+- validate succeeds only when its success dialog was shown.
+- Any validation failure raises `ValidationError` carrying the dialog text and
+  the full `AnalysisValidation` sheet, printed in red with a non-zero exit
+  code.
+
+Any other modal prompt (not listed above) still blocks the run, because there
+is nobody to click it.
 
 ### Working copy
 
@@ -115,26 +146,31 @@ python src/run_aa_workbook.py [options] <path>
 | `--idle-timeout S` | seconds to wait for Excel to go idle (default 300) |
 | `--settle S` | extra seconds after idle (default 1.0) |
 
-Step keys: `apply_definitions`, `load_definitions`, `run_validation`.
+Step keys: `reload`, `commit_save`, `validate`, `auto` (`auto` expands to
+`commit_save` -> `reload` -> `commit_save`).
 
 ### Macro configuration
 
-The three macros are placeholders in one `STEPS` table at the top of the script:
+The three macros are the real VBA entry points behind the AA buttons, in one
+`STEPS` table at the top of the script:
 
-| Step key | Default macro |
-| --- | --- |
-| `apply_definitions` | `ApplyDefinitions` |
-| `load_definitions` | `LoadDefinitions` |
-| `run_validation` | `RunValidation` |
+| Step key | Default macro | VBA module |
+| --- | --- | --- |
+| `reload` | `ListAll` | `Simplified` |
+| `commit_save` | `SaveAll` | `Simplified` |
+| `validate` | `Button1_Click` | `Addon` |
 
-The real VBA procedure names are not part of this repo; edit the table or pass
-`--macro-<step>` to match the actual names.
+`auto` is not a macro; it is a synthetic action expanded into
+`commit_save` -> `reload` -> `commit_save`.  Override a leaf macro name at
+runtime with `--macro-<step>` (the override also applies inside `auto`).
 
 ### Limitations
 
-- The macros must be `Public` subs taking no arguments.
-- They must not show modal UI (`MsgBox`, `InputBox`, user forms); there is no
-  one to click them, so the script would hang.
+- The macros must be `Public` subs.  `ListAll` is called with no arguments, so
+  its `Optional RJob` is `IsMissing` and the overwrite prompt is shown.
+- Only the message boxes listed above are handled; any other modal UI
+  (`InputBox`, user forms, or an unknown `MsgBox`) will hang the script
+  because there is nobody to click it.
 
 ## Development
 

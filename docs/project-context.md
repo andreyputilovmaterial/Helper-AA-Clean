@@ -20,6 +20,16 @@
 > (`<name>-working-automated-YYYY-MM-DD.xlsm`, same dir, overwritten daily)
 > before running and operates only on that copy, so the VBA macros' repeated
 > saves never touch the original. `--dry-run` does not create the copy.
+> (2026-11-11) `run_aa_workbook.py` reworked to the real three actions —
+> reload (`ListAll`), commit/save (`SaveAll`), validate (`Button1_Click`) —
+> with a `DialogWatcher` thread that clicks the message boxes, and a pre-step
+> that reads the data-file path from `Main`!C13 into `DATA_FILE_PATH`.
+> Success is confirmed by the dialog seen (plus an mtime check on the data
+> file for commit/save); validation failures capture the dialog text and the
+> `AnalysisValidation` sheet.
+> (2026-11-11) Added a synthetic `auto` action (commit/save -> reload ->
+> commit/save) and renamed the data-file path symbols to clear, non-cryptic
+> naming.
 
 ## 1. Purpose
 
@@ -32,10 +42,12 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
 - `docs/architecture.md` — stable technical documentation (full docs).
 - `docs/project-context.md` — living working memory (this file; not stable).
 - `src/clean_aa_backups.py` — the whole tool (single file, no build step).
-- `src/run_aa_workbook.py` — Windows-only COM automation of the AA run steps.
+- `src/run_aa_workbook.py` — Windows-only COM automation of the AA actions
+  (reload / commit-save / validate) with programmatic message-box handling.
 - `tests/test_clean_aa_backups.py` — pytest suite.
-- `tests/test_run_aa_workbook.py` — pytest suite for step planning / wait logic
-  (no COM needed, so it runs on any OS).
+- `tests/test_run_aa_workbook.py` — pytest suite for step planning, dialog
+  matching, data-file-path reading, and pass/fail outcome logic (no COM
+  needed, so it runs on any OS).
 - `.clinerules/` — repo rules for non-interactive commands, project context,
   code style/errors, commit-message wording/process, and GitHub issue
   references.
@@ -61,9 +73,21 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
   buttons do rather than reimplementing the logic.
 - **`win32com` import is lazy.** It is imported inside a function, so `--help`,
   `--dry-run`, and the pytest suite run on non-Windows machines without pywin32.
-- **Macro names are placeholders.** The real VBA procedure names are not in this
-  repo, so they live in one `STEPS` table (plus `--macro-...` CLI overrides)
-  instead of being hard-coded everywhere.
+- **The three actions map to the real VBA procedures.** `reload` → `ListAll`
+  (Simplified), `commit_save` → `SaveAll` (Simplified), `validate` →
+  `Button1_Click` (Addon), still in one `STEPS` table (plus `--macro-...`
+  overrides).
+- **`auto` is a synthetic action.** It expands to commit/save -> reload ->
+  commit/save (a full cycle of 2x commit/save with a reload in between) in
+  `plan_steps()`, so the existing per-step dialog/outcome handling applies.
+- **Message boxes are dismissed from a background thread.** `Application.Run`
+  blocks on modal `MsgBox`s, so a `DialogWatcher` thread matches them by
+  title/text and sends `WM_COMMAND` (IDOK/IDCANCEL); validation-error text and
+  the `AnalysisValidation` sheet are captured for the failure report.
+- **Pre-step #0 reads the data file path.** Cell `C13` on `Main` is read
+  into the module global `DATA_FILE_PATH` (a `Path`), its existence is
+  verified, and after commit/save the file's mtime must advance (the
+  "recently edited" check).
 
 ## 4. Findings / gotchas
 
@@ -74,20 +98,20 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
 - `Application.Run` is synchronous, but the script still polls `Application.Ready`
   / `Application.Busy` as a safety net for macros that hand work off
   asynchronously.
-- The run macros must be `Public`, take no arguments, and must not show modal UI
-  (`MsgBox`, `InputBox`, user forms), otherwise the script hangs waiting for a
-  click that never comes.
+- The run macros must be `Public`.  They do show modal `MsgBox` prompts; the
+  known ones are dismissed by the watcher, but any other modal UI (`InputBox`,
+  user forms, unknown `MsgBox`) still hangs the script.
 
 ## 5. Roadmap / follow-ups
 
 - `clean_aa_backups.py`: a `--now` override for reproducible CLI testing;
   directory recursion is already available via `-r`.
-- `run_aa_workbook.py`: fill in the real VBA macro names once known; consider
-  `--update-links` if the workbook prompts about external links.
+- `run_aa_workbook.py`: consider `--update-links` if the workbook prompts about
+  external links; consider a watchdog timeout for unexpected modal dialogs.
 
 ## 6. Open questions
 
 - Whether the quarter rule should also count snapshots inside the 6-month window
   (currently it does not: the 6-month keep is applied first, so a quarter can end
   up with more than one kept set if several saves fall in the recent window).
-- The exact VBA procedure names behind the apply/load/validate buttons.
+- (resolved) The VBA procedure names: `ListAll`, `SaveAll`, `Button1_Click`.
