@@ -92,6 +92,19 @@ def test_run_macro_runs_qualified_name():
     assert xl.calls == ["'aaa.xlsm'!ListAll"]
 
 
+def test_run_macro_logs_start_and_finish_events(tmp_path):
+    log = tmp_path / "aa_event_log.csv"
+    ruw.EVENT_LOG_PATH = log
+    try:
+        ruw.run_macro(FakeExcel(), "aaa.xlsm", "ListAll", timeout=1, settle_seconds=0)
+    finally:
+        ruw.EVENT_LOG_PATH = None
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "datetime,event,phase"
+    assert lines[1].endswith(",started the macro ListAll,started")
+    assert lines[2].endswith(",finished the macro ListAll,finished")
+
+
 # --- working copy ------------------------------------------------------------
 
 def test_working_copy_path_appends_date_to_stem(tmp_path):
@@ -358,6 +371,57 @@ def test_write_log_row_escapes_csv_specials(tmp_path):
         rows = list(csv.reader(handle))
     assert rows[0] == ruw.LOG_HEADER
     assert rows[1][5] == details
+
+
+# --- event log helpers -------------------------------------------------------
+
+def test_write_event_log_row_creates_header_and_row(tmp_path):
+    log = tmp_path / "aa_event_log.csv"
+    now = datetime(2026, 11, 11, 12, 34, 56, 123456)
+    ruw.write_event_log_row(log, "started the macro SaveAll", "started", now=now)
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "datetime,event,phase"
+    assert lines[1] == "2026-11-11 12:34:56.123456,started the macro SaveAll,started"
+
+
+def test_write_event_log_row_appends_without_second_header(tmp_path):
+    log = tmp_path / "aa_event_log.csv"
+    now = datetime(2026, 11, 11, 12, 0, 0)
+    ruw.write_event_log_row(
+        log, "started the program (overall py script)", "started", now=now
+    )
+    ruw.write_event_log_row(log, "finished the macro SaveAll", "finished", now=now)
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert lines[0].startswith("datetime,event,phase")
+    assert len(lines) == 3
+
+
+def test_write_event_log_row_escapes_csv_specials(tmp_path):
+    log = tmp_path / "aa_event_log.csv"
+    now = datetime(2026, 11, 11, 12, 0, 0)
+    ruw.write_event_log_row(log, 'captured a dialog box "Overwrite?"', "finished", now=now)
+    with open(log, newline="", encoding="utf-8") as handle:
+        rows = list(csv.reader(handle))
+    assert rows[0] == ruw.EVENT_LOG_HEADER
+    assert rows[1][1] == 'captured a dialog box "Overwrite?"'
+
+
+def test_log_event_noop_when_no_path_configured(tmp_path):
+    ruw.EVENT_LOG_PATH = None
+    ruw.log_event("anything", "started")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_log_event_writes_to_configured_path(tmp_path):
+    log = tmp_path / "aa_event_log.csv"
+    ruw.EVENT_LOG_PATH = log
+    try:
+        ruw.log_event("started the program (overall py script)", "started")
+    finally:
+        ruw.EVENT_LOG_PATH = None
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "datetime,event,phase"
+    assert lines[1].endswith(",started the program (overall py script),started")
 
 
 # --- evaluate_step_outcome ---------------------------------------------------

@@ -67,6 +67,13 @@ Every action that actually runs appends one row to a CSV log
 and ``validation_details`` (the message box text plus the
 ``AnalysisValidation`` sheet when a validation failed).
 
+A second, more frequently updated event log (``aa_event_log.csv``) in the
+same directory records one row per lifecycle event with three columns:
+``datetime``, ``event``, and ``phase`` (``started`` / ``finished``).  The
+events are the program start/finish, each macro's start/finish, a
+failed-validation signal, exceptions, explicit saves, and captured dialog
+boxes.
+
 Windows only
 ------------
 This uses COM automation, so it runs on Windows with Excel installed and
@@ -130,6 +137,35 @@ LOG_HEADER = [
     "result",
     "validation_details",
 ]
+
+# Detailed event log written next to the AA file: one row per event, updated
+# more frequently than the per-action CSV log above.  Columns are a timestamp,
+# the event, and its phase ("started" / "finished").
+EVENT_LOG_FILENAME = "aa_event_log.csv"
+EVENT_LOG_HEADER = ["datetime", "event", "phase"]
+
+#: Phase column values for the event log.
+EVENT_PHASE_STARTED = "started"
+EVENT_PHASE_FINISHED = "finished"
+
+#: Path of the event log for the current run (set by ``main``); ``None`` means
+#: no event logging (tests, or library use without a configured log).
+EVENT_LOG_PATH = None
+
+# Serialises appends to the event log, which is written from both the main
+# thread (macro start/finish, save, validation) and the dialog-watcher thread.
+_EVENT_LOG_LOCK = threading.Lock()
+
+# Event names written to the event log (column 2).  Start/finish of macros and
+# dialogs append the macro name / dialog caption at the call site.
+EVENT_PROGRAM_STARTED = "started the program (overall py script)"
+EVENT_PROGRAM_FINISHED = "finished the program (overall py script)"
+EVENT_MACRO_STARTED = "started the macro"
+EVENT_MACRO_FINISHED = "finished the macro"
+EVENT_VALIDATION_FAILURE = "received a signal about failed validation"
+EVENT_EXCEPTION = "exception"
+EVENT_SAVE = "explicitly called save on Excel file"
+EVENT_DIALOG_CAPTURED = "captured a dialog box"
 
 # Column 2 values (the four programs/actions the script can run).
 PROGRAM_NAMES = {
@@ -409,10 +445,12 @@ def run_macro(xl, workbook_name, macro, timeout, settle_seconds):
     """Run ``macro`` from ``workbook_name`` and wait for Excel to settle."""
     qualified = f"'{workbook_name}'!{macro}"
     print(f"  -> {qualified}")
+    log_event(f"{EVENT_MACRO_STARTED} {macro}", EVENT_PHASE_STARTED)
     xl.Run(qualified)
     wait_for_excel_idle(xl, timeout)
     if settle_seconds:
         time.sleep(settle_seconds)
+    log_event(f"{EVENT_MACRO_FINISHED} {macro}", EVENT_PHASE_FINISHED)
 
 
 
@@ -532,6 +570,43 @@ def write_log_row(log_path, program, aa_file, data_file, result, validation_deta
         writer.writerow(row)
 
 
+def write_event_log_row(event_log_path, event, phase, now=None):
+    """Append one event-log CSV row, writing the header first if new/empty.
+
+    Columns are ``datetime`` (with microseconds so rapid events stay in
+    order), ``event``, and ``phase`` (``started`` / ``finished``).  Appends to
+    an existing file; a new or empty file gets the header first.
+    """
+    now = now or datetime.now()
+    row = [
+        now.strftime("%Y-%m-%d %H:%M:%S.%f"),
+        event,
+        phase,
+    ]
+    event_log_path = Path(event_log_path)
+    write_header = (
+        not event_log_path.exists() or event_log_path.stat().st_size == 0
+    )
+    with _EVENT_LOG_LOCK:
+        with open(event_log_path, "a", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            if write_header:
+                writer.writerow(EVENT_LOG_HEADER)
+            writer.writerow(row)
+
+
+def log_event(event, phase):
+    """Record ``event`` to the configured event log, if one is configured.
+
+    No-op when :data:`EVENT_LOG_PATH` is ``None`` (the default outside a CLI
+    run).  Used from both the main thread and the dialog-watcher thread; the
+    append is serialised by ``_EVENT_LOG_LOCK``.
+    """
+    if EVENT_LOG_PATH is None:
+        return
+    write_event_log_row(EVENT_LOG_PATH, event, phase)
+
+
 def _first_record(records, key):
     """Return the first :class:`DialogRecord` for ``key``, or ``None``."""
     for record in records:
@@ -569,6 +644,7 @@ def evaluate_step_outcome(step, records, before_mtime, workbook):
     if step.context == AUTO_COMMIT_SECOND:
         error_record = _first_record(records, "validation_error")
         if error_record is not None:
+            log_event(EVENT_VALIDATION_FAILURE, EVENT_PHASE_FINISHED)
             print("auto: second commit/save failed validation as expected (success)")
             return format_validation_details(
                 error_record.captured_text,
@@ -584,6 +660,7 @@ def evaluate_step_outcome(step, records, before_mtime, workbook):
 
     error_record = _first_record(records, "validation_error")
     if error_record is not None:
+        log_event(EVENT_VALIDATION_FAILURE, EVENT_PHASE_FINISHED)
         sheet_text = read_sheet_text(workbook, ANALYSIS_VALIDATION_SHEET)
         raise ValidationError(error_record.captured_text, sheet_text)
 
@@ -826,6 +903,10 @@ class DialogWatcher:
                         (child["text"], child["class"], child["id"])
                         for child in children
                     ]
+                    log_event(
+                        f"{EVENT_DIALOG_CAPTURED} {caption!r}",
+                        EVENT_PHASE_FINISHED,
+                    )
                     print(
                         f"dialog watcher: dismissing {dialog.key!r} ({caption!r}) "
                         f"[class={class_name!r}, children={child_summary}]"
@@ -853,6 +934,7 @@ def run_step(xl, workbook, workbook_name, step, idle_timeout, settle_seconds):
         run_macro(xl, workbook_name, step.macro, idle_timeout, settle_seconds)
 
     details = evaluate_step_outcome(step, watcher.records, before_mtime, workbook)
+    log_event(f"{EVENT_SAVE} {workbook_name}", EVENT_PHASE_FINISHED)
     workbook.Save()
     return details
 
@@ -1016,6 +1098,8 @@ def build_parser():
 
 
 def main(argv=None):
+    global EVENT_LOG_PATH
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -1040,7 +1124,12 @@ def main(argv=None):
     for step in steps:
         print(f"  - {step.label}")
 
+    EVENT_LOG_PATH = path.parent / EVENT_LOG_FILENAME
+    print(f"event log: {EVENT_LOG_PATH}")
+
     try:
+        log_event(EVENT_PROGRAM_STARTED, EVENT_PHASE_STARTED)
+
         working_path = make_working_copy(path)
         print(f"working copy: {working_path}")
 
@@ -1060,6 +1149,7 @@ def main(argv=None):
         print(f"{parser.prog}: finished; {ran} step(s) run")
         return 0
     except Exception as exc:
+        log_event(f"{EVENT_EXCEPTION}: {exc}", EVENT_PHASE_FINISHED)
         print("", file=sys.stderr)
         print("Stack trace:", file=sys.stderr)
         print("", file=sys.stderr)
@@ -1068,6 +1158,9 @@ def main(argv=None):
         print("Error:", file=sys.stderr)
         print(f"{STDOUT_COLOR_RED}{exc}{STDOUT_COLOR_RESET}", file=sys.stderr)
         return 1
+    finally:
+        log_event(EVENT_PROGRAM_FINISHED, EVENT_PHASE_FINISHED)
+        EVENT_LOG_PATH = None
 
 
 if __name__ == "__main__":

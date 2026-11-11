@@ -144,6 +144,26 @@ The file is created on first use and appended to afterwards.  For `auto`, the
 the first commit/save's failure stops the run, otherwise the second
 commit/save's expected failure, or empty if none failed.
 
+A second, more frequently updated event log (`aa_event_log.csv`) is written
+to the same directory.  Each row has three columns, and the file is created
+on first use then appended to (a new or empty file gets the header first):
+
+| Column | Meaning |
+| --- | --- |
+| `datetime` | when the event was logged (microsecond precision, so rapid events keep their order) |
+| `event` | the lifecycle event, e.g. `started the program (overall py script)` or `started the macro SaveAll` |
+| `phase` | `started` or `finished` |
+
+Events logged (phase in parentheses):
+
+- `started the program (overall py script)` (`started`) — the CLI entry point began.
+- `finished the program (overall py script)` (`finished`) — the CLI entry point ended, success or failure.
+- `started the macro <Macro>` (`started`) and `finished the macro <Macro>` (`finished`) — around each `Application.Run` call.
+- `received a signal about failed validation` (`finished`) — a `Validation Error` message box was recorded.
+- `exception: <message>` (`finished`) — an uncaught exception reached the top level.
+- `explicitly called save on Excel file <name>` (`finished`) — just before `Workbook.Save()`.
+- `captured a dialog box <caption>` (`finished`) — the dialog watcher matched and dismissed a message box.
+
 ### Working copy
 
 Before launching Excel, the script copies the input next to itself as

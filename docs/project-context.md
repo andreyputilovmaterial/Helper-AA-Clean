@@ -1,6 +1,13 @@
 # Project Context — Helper-AA-Clean
 
 > Last updated: 2026-11-11
+> (2026-11-11) Added a second, more detailed event log for
+> `run_aa_workbook.py`: `aa_event_log.csv` next to the AA file, three columns
+> (`datetime`, `event`, `phase`), created on first use then appended.  Logs the
+> program start/finish, each macro's start/finish, a failed-validation signal,
+> exceptions, explicit saves, and captured dialog boxes.  Writes go through the
+> module global `EVENT_LOG_PATH` plus `log_event()` and are serialised by
+> `_EVENT_LOG_LOCK` (the dialog watcher also logs from its own thread).
 > (2026-11-11) Captured the AA workbook's real VBA source (`ListAll`,
 > `SaveAll`, `Button1_Click`) from the original implementation request into a
 > new stable reference `docs/aa-vba-macros.md`, linked it from
