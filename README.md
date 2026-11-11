@@ -50,10 +50,46 @@ Macro-enabled `.xlsm` files are loaded with `keep_vba=True`, so VBA macros are
 preserved on re-save. As with any tool that re-saves a workbook, use
 `--dry-run` or `--backup` first.
 
+## Running the AA workflow (Windows)
+
+`src/run_aa_workbook.py` drives the AA workbook's own VBA buttons — apply
+definitions, load definitions, and validation — through `Excel.Application`
+(pywin32 / `win32com.client`), instead of clicking and waiting by hand.
+
+Requirements (Windows only):
+
+- Excel installed
+- [pywin32](https://pypi.org/project/pywin32/) — `pip install pywin32`
+
+```bash
+# Preview the plan without launching Excel
+python src/run_aa_workbook.py --dry-run path/to/file.xlsm
+
+# Run all three steps, hidden, then save
+python src/run_aa_workbook.py path/to/file.xlsm
+
+# Show the Excel window and leave it open afterwards (for debugging)
+python src/run_aa_workbook.py --visible --leave-open path/to/file.xlsm
+
+# Skip a step, and/or point a step at a differently named macro
+python src/run_aa_workbook.py --skip load_definitions \
+    --macro-run-validation ValidateNow path/to/file.xlsm
+```
+
+The macro names are configurable placeholders (`ApplyDefinitions`,
+`LoadDefinitions`, `RunValidation`) because the real VBA procedure names are
+not part of this repo. Edit the `STEPS` table at the top of the script, or
+override with `--macro-...` flags, to match the actual names in your workbook.
+The macros must be `Public` subs taking no arguments and must not show modal
+dialogs (message boxes, input boxes, or user forms), since there is no one to
+click them.
+
 ## Layout
 
 - `src/clean_aa_backups.py` — the script.
-- `tests/` — pytest suite for the retention logic and in-place clean/dry-run.
+- `src/run_aa_workbook.py` — Windows-only VBA automation for the AA run steps.
+- `tests/` — pytest suite for the retention logic and in-place clean/dry-run,
+  plus the run-workbook step planning / wait logic.
 
 ## Development
 

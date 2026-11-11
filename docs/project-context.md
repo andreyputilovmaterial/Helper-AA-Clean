@@ -1,12 +1,16 @@
 # Project Context — Helper-AA-Clean
 
-> Last updated: 2026-11-06
+> Last updated: 2026-11-11
 > (2026-11-06) Initial version. Created `src/clean_aa_backups.py` and its pytest
 > suite. Retention: keep everything from the last 6 months, then the single most
 > recent backup per sheet name per calendar quarter. Grouping is per sheet name
 > (not per exact timestamp) because the three sheets of one backup are stamped a
 > few seconds apart. Uses openpyxl (no live Excel automation), `keep_vba=True`
 > for `.xlsm`.
+> (2026-11-11) Added `src/run_aa_workbook.py` (Windows-only, pywin32/COM) to
+> automate the AA workbook's VBA buttons (apply definitions, load definitions,
+> run validation) instead of clicking and waiting. Macro names are placeholders
+> until the real VBA procedure names are known.
 
 ## 1. Purpose
 
@@ -16,7 +20,10 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
 ## 2. Layout
 
 - `src/clean_aa_backups.py` — the whole tool (single file, no build step).
+- `src/run_aa_workbook.py` — Windows-only COM automation of the AA run steps.
 - `tests/test_clean_aa_backups.py` — pytest suite.
+- `tests/test_run_aa_workbook.py` — pytest suite for step planning / wait logic
+  (no COM needed, so it runs on any OS).
 - `.clinerules/` — repo rules for non-interactive commands, project context,
   code style/errors, and commit messages.
 
@@ -33,8 +40,17 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
 - **6-month window uses real calendar months.** `subtract_months` clamps the day
   to the target month's length (Mar 31 − 6 months = Sep 30) instead of
   approximating with `timedelta(days=...)`.
-- **No build/dist step.** The script runs straight from `src/`; there are no
+- **No build/dist step.** The scripts run straight from `src/`; there are no
   `.bat`/`.sh` wrappers.
+- **Run steps go through the workbook's own VBA.** `run_aa_workbook.py` opens the
+  file with `Excel.Application` (`win32com.client.DispatchEx`) and calls
+  `Application.Run("'file.xlsm'!Macro")`, so it exercises exactly what the
+  buttons do rather than reimplementing the logic.
+- **`win32com` import is lazy.** It is imported inside a function, so `--help`,
+  `--dry-run`, and the pytest suite run on non-Windows machines without pywin32.
+- **Macro names are placeholders.** The real VBA procedure names are not in this
+  repo, so they live in one `STEPS` table (plus `--macro-...` CLI overrides)
+  instead of being hard-coded everywhere.
 
 ## 4. Findings / gotchas
 
@@ -42,14 +58,23 @@ Clean old backup sheets out of AA (Excel) workbooks. Backup sheets are named
   `HHMMSS` suffix is unique per sheet, not per snapshot.
 - openpyxl re-saves the whole workbook; unusual elements (some charts/images/form
   controls) may not round-trip. `--dry-run` / `--backup` are the safety net.
+- `Application.Run` is synchronous, but the script still polls `Application.Ready`
+  / `Application.Busy` as a safety net for macros that hand work off
+  asynchronously.
+- The run macros must be `Public`, take no arguments, and must not show modal UI
+  (`MsgBox`, `InputBox`, user forms), otherwise the script hangs waiting for a
+  click that never comes.
 
 ## 5. Roadmap / follow-ups
 
-- None currently. Possible: a `--now` override for reproducible CLI testing;
+- `clean_aa_backups.py`: a `--now` override for reproducible CLI testing;
   directory recursion is already available via `-r`.
+- `run_aa_workbook.py`: fill in the real VBA macro names once known; consider
+  `--update-links` if the workbook prompts about external links.
 
 ## 6. Open questions
 
 - Whether the quarter rule should also count snapshots inside the 6-month window
   (currently it does not: the 6-month keep is applied first, so a quarter can end
   up with more than one kept set if several saves fall in the recent window).
+- The exact VBA procedure names behind the apply/load/validate buttons.
